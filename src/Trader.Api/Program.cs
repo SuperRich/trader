@@ -1,6 +1,7 @@
 using Trader.Core.Models;
 using Trader.Core.Services;
 using Trader.Infrastructure.Data;
+using Trader.Infrastructure.Services;
 
 namespace Trader.Api;
 
@@ -10,6 +11,9 @@ public class Program
     {
         var builder = WebApplication.CreateBuilder(args);
 
+        // Enable environment variable configuration
+        builder.Configuration.AddEnvironmentVariables(prefix: "TRADER_");
+
         // Add services to the container
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
@@ -17,6 +21,9 @@ public class Program
         // Register our services
         builder.Services.AddSingleton<PredictionService>();
         builder.Services.AddSingleton<IForexDataProvider, ForexDataProvider>();
+        
+        // Register Perplexity sentiment analyzer
+        builder.Services.AddHttpClient<ISentimentAnalyzer, PerplexitySentimentAnalyzer>();
         
         // Enable CORS
         builder.Services.AddCors(options =>
@@ -42,6 +49,7 @@ public class Program
         app.UseCors("AllowAll");
 
         // Define API endpoints
+        // Endpoint to get prediction for a specific currency pair and timeframe
         app.MapGet("/api/forex/prediction/{currencyPair}/{timeframe}", 
             (string currencyPair, string timeframe, PredictionService predictionService) =>
         {
@@ -56,15 +64,22 @@ public class Program
         .WithName("GetForexPrediction")
         .WithOpenApi();
 
+        // Endpoint to get predictions for a currency pair across all timeframes
         app.MapGet("/api/forex/multi-timeframe/{currencyPair}", 
             (string currencyPair, PredictionService predictionService) =>
         {
+            if (string.IsNullOrWhiteSpace(currencyPair))
+            {
+                return Results.BadRequest("Currency pair is required");
+            }
+            
             var predictions = predictionService.AnalyzeMultipleTimeframes(currencyPair);
             return Results.Ok(predictions);
         })
         .WithName("GetMultiTimeframePredictions")
         .WithOpenApi();
 
+        // Endpoint to get historical candle data
         app.MapGet("/api/forex/candles/{currencyPair}/{timeframe}/{count}", 
             async (string currencyPair, string timeframe, int count, IForexDataProvider dataProvider) =>
         {
@@ -82,6 +97,21 @@ public class Program
             return Results.Ok(candles);
         })
         .WithName("GetForexCandles")
+        .WithOpenApi();
+        
+        // Endpoint to get market sentiment analysis for a currency pair
+        app.MapGet("/api/forex/sentiment/{currencyPair}", 
+            async (string currencyPair, ISentimentAnalyzer sentimentAnalyzer) =>
+        {
+            if (string.IsNullOrWhiteSpace(currencyPair))
+            {
+                return Results.BadRequest("Currency pair is required");
+            }
+            
+            var sentiment = await sentimentAnalyzer.AnalyzeSentimentAsync(currencyPair);
+            return Results.Ok(sentiment);
+        })
+        .WithName("GetForexSentiment")
         .WithOpenApi();
 
         app.Run();
