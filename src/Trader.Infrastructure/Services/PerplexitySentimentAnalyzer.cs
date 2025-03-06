@@ -171,19 +171,21 @@ public class PerplexitySentimentAnalyzer : ISentimentAnalyzer
             // First, we'll use Perplexity to get both current market prices and trading recommendations
 
             var prompt = $@"
-You are a forex trading expert. I need you to provide exactly {count} forex trading recommendations in a specific JSON format.
+You are a forex trading expert. I need you to provide exactly {count} forex trading recommendations with ACCURATE, VERIFIED price data.
 
 STEP 1: Find the CURRENT, REAL-TIME prices for these major forex pairs:
 EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, USDCAD, EURJPY, EURGBP, USDCHF, NZDUSD
 
-STEP 2: Based on real market prices and your analysis:
+CRUCIAL: Please use MULTIPLE SOURCES to verify these prices. The prices MUST be current within the last hour. Make sure your price data reflects actual market rates, not estimates.
+
+STEP 2: Based on these verified prices and your analysis:
 - Select {count} most promising pairs to trade right now
 - For each pair, determine Buy or Sell direction
-- Include the current market price you found (must be a non-zero decimal number)
-- Calculate take profit (TP) price (must be a non-zero decimal number)
-- Calculate stop loss (SL) price (must be a non-zero decimal number)
-- Ensure TP and SL are at logical levels based on support/resistance
-- Provide a clear rationale for each trade recommendation
+- Include the current market price you verified (must be accurate to 5 decimal places for non-JPY pairs, 3 places for JPY pairs)
+- Calculate take profit (TP) price based on key technical resistance/support levels
+- Calculate stop loss (SL) price based on key technical resistance/support levels
+- Ensure TP and SL are at logical price levels with a reasonable risk-reward ratio (at least 1:1)
+- Include the source(s) you used to verify the price data in the rationale
 
 STEP 3: Format your entire response as VALID JSON with this exact structure:
 
@@ -201,27 +203,48 @@ STEP 3: Format your entire response as VALID JSON with this exact structure:
         ""Key technical reason"",
         ""Important fundamental factor""
       ],
-      ""rationale"": ""Concise trading rationale with specific levels""
+      ""rationale"": ""Concise trading rationale with verified price sources and levels""
     }}
   ]
 }}
 
-IMPORTANT RULES:
-1. Your entire response must be ONLY the JSON object - no intro text, no explanations
-2. All price values must be non-zero decimal numbers
-3. Stop loss price must be different from current price
-4. Include exactly {count} recommendations
-5. Sentiment must be one of: bullish, bearish, or neutral
-6. Each recommendation must have all the fields shown in the example
+VERIFICATION REQUIREMENTS:
+1. DOUBLE-CHECK all price data before submitting your response
+2. Ensure price relationships are accurate (JPY pairs typically around 100-200, EUR/USD around 1.05-1.15, etc.)
+3. If a price seems unusual or has changed significantly since your knowledge cutoff, note this in the rationale
+4. Make sure TP and SL levels are realistic distances from current price (not too tight or too wide)
+5. Buy direction should have TP higher than current price and SL lower
+6. Sell direction should have TP lower than current price and SL higher
 
-Give me the {count} most promising forex trades based on current market prices.";
+RESPONSE RULES:
+1. Your entire response must be ONLY the JSON object - no intro text, no explanations
+2. All price values must be non-zero decimal numbers with appropriate precision
+3. Include exactly {count} recommendations
+4. Sentiment must accurately match direction (bullish for Buy, bearish for Sell, or neutral)
+5. Each recommendation must have all fields shown in the example
+
+Give me the {count} most promising forex trades with VERIFIED, ACCURATE price data.";
 
             var requestBody = new
             {
                 model = "sonar", // Using current model from Perplexity docs
                 messages = new[]
                 {
-                    new { role = "system", content = "You are an expert forex trader with access to real-time market data. Your task is to generate forex trading recommendations in a strict JSON format. You must only return valid JSON data with no preamble or explanations outside the JSON structure. All numeric values must be non-zero. You must always output properly formatted JSON that can be parsed by a standard JSON parser." },
+                    new { role = "system", content = @"You are an expert forex trader with access to real-time market data from multiple financial sources. 
+
+KEY RESPONSIBILITIES:
+1. Provide ACCURATE, CURRENT price data that reflects actual market rates
+2. Double-verify all prices from multiple reliable financial sources
+3. Ensure price relationships are logical (e.g., EURUSD ~1.05-1.15, JPY pairs ~100-200)
+4. Calculate reasonable take profit and stop loss levels based on verified prices
+5. Format response as valid JSON that follows the requested structure exactly
+
+YOU MUST:
+- Verify price data is correct and current before submission
+- Format all non-JPY forex pairs to 5 decimal places (e.g., 1.10952)
+- Format JPY pairs to 3 decimal places (e.g., 154.305)
+- Ensure price values reflect their proper magnitude (e.g., USDJPY > 100)
+- Generate only properly formatted JSON with no text outside the JSON structure" },
                     new { role = "user", content = prompt }
                 },
                 temperature = 0.2,
@@ -454,20 +477,139 @@ Give me the {count} most promising forex trades based on current market prices."
 
             // Apply validation and fix any problematic recommendations
             var validRecommendations = recommendationsData.recommendations.Select(r => {
+                _logger.LogInformation("Validating recommendation for {Pair} with price {Price}", r.pair, r.currentPrice);
+                
                 // Fix any missing or invalid values
                 if (string.IsNullOrEmpty(r.pair))
                     r.pair = "EURUSD";
+                
+                // Verify prices are in a reasonable range based on currency pair
+                bool containsJpy = r.pair.Contains("JPY", StringComparison.OrdinalIgnoreCase);
+                bool isValid = true;
+                
+                // Validate and fix price magnitudes if needed
+                if (containsJpy)
+                {
+                    // JPY pairs are typically around 100-200
+                    if (r.currentPrice < 50 || r.currentPrice > 250)
+                    {
+                        _logger.LogWarning("Suspicious JPY price detected: {Pair} at {Price} - this is outside normal range", 
+                            r.pair, r.currentPrice);
+                            
+                        // If price is just wrong by magnitude (decimal point)
+                        if (r.currentPrice < 1 && r.currentPrice > 0)
+                        {
+                            _logger.LogInformation("Fixing JPY price magnitude (too small): {Pair} from {OldPrice} to {NewPrice}", 
+                                r.pair, r.currentPrice, r.currentPrice * 100);
+                            r.currentPrice *= 100;
+                            
+                            // Also fix TP/SL if they need the same adjustment
+                            if (r.takeProfitPrice < 1) r.takeProfitPrice *= 100;
+                            if (r.stopLossPrice < 1) r.stopLossPrice *= 100;
+                        }
+                        else if (r.currentPrice > 1000)
+                        {
+                            _logger.LogInformation("Fixing JPY price magnitude (too large): {Pair} from {OldPrice} to {NewPrice}", 
+                                r.pair, r.currentPrice, r.currentPrice / 10);
+                            r.currentPrice /= 10;
+                            
+                            // Also fix TP/SL if they need the same adjustment
+                            if (r.takeProfitPrice > 1000) r.takeProfitPrice /= 10;
+                            if (r.stopLossPrice > 1000) r.stopLossPrice /= 10;
+                        }
+                        else
+                        {
+                            isValid = false;
+                        }
+                    }
+                }
+                else
+                {
+                    // Most other pairs are in 0.5-2.0 range
+                    if (r.currentPrice > 10 || r.currentPrice < 0.1)
+                    {
+                        _logger.LogWarning("Suspicious price detected: {Pair} at {Price} - this is outside normal range", 
+                            r.pair, r.currentPrice);
+                            
+                        // If price is just wrong by magnitude (decimal point)
+                        if (r.currentPrice > 10 && r.currentPrice < 1000)
+                        {
+                            _logger.LogInformation("Fixing price magnitude (too large): {Pair} from {OldPrice} to {NewPrice}", 
+                                r.pair, r.currentPrice, r.currentPrice / 10);
+                            r.currentPrice /= 10;
+                            
+                            // Also fix TP/SL if they need the same adjustment
+                            if (r.takeProfitPrice > 10) r.takeProfitPrice /= 10;
+                            if (r.stopLossPrice > 10) r.stopLossPrice /= 10;
+                        }
+                        else if (r.currentPrice < 0.1 && r.currentPrice > 0.001)
+                        {
+                            _logger.LogInformation("Fixing price magnitude (too small): {Pair} from {OldPrice} to {NewPrice}", 
+                                r.pair, r.currentPrice, r.currentPrice * 10);
+                            r.currentPrice *= 10;
+                            
+                            // Also fix TP/SL if they need the same adjustment
+                            if (r.takeProfitPrice < 0.1) r.takeProfitPrice *= 10;
+                            if (r.stopLossPrice < 0.1) r.stopLossPrice *= 10;
+                        }
+                        else
+                        {
+                            isValid = false;
+                        }
+                    }
+                }
                     
-                if (r.currentPrice <= 0)
-                    r.currentPrice = r.pair.Contains("JPY") ? 150.0m : 1.1m;
+                // Fix invalid current price
+                if (!isValid || r.currentPrice <= 0)
+                {
+                    _logger.LogWarning("Using fallback price for {Pair}", r.pair);
+                    r.currentPrice = containsJpy ? 150.0m : r.pair.StartsWith("GBP") ? 1.25m : 1.1m;
+                }
                     
-                if (r.takeProfitPrice <= 0)
+                // Fix invalid TP/SL
+                if (r.takeProfitPrice <= 0 || Math.Abs(r.takeProfitPrice - r.currentPrice) < 0.0001m)
+                {
                     r.takeProfitPrice = r.direction.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? 
                         r.currentPrice * 1.01m : r.currentPrice * 0.99m;
+                }
                         
-                if (r.stopLossPrice <= 0 || r.stopLossPrice == r.currentPrice)
+                if (r.stopLossPrice <= 0 || Math.Abs(r.stopLossPrice - r.currentPrice) < 0.0001m)
+                {
                     r.stopLossPrice = r.direction.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? 
                         r.currentPrice * 0.99m : r.currentPrice * 1.01m;
+                }
+                
+                // Ensure TP and SL are correctly positioned relative to current price
+                if (r.direction.Equals("Buy", StringComparison.OrdinalIgnoreCase))
+                {
+                    // For Buy, TP should be above current, SL below
+                    if (r.takeProfitPrice < r.currentPrice)
+                    {
+                        _logger.LogWarning("Fixing Buy TP that was below current price: {Pair}", r.pair);
+                        r.takeProfitPrice = r.currentPrice * 1.01m;
+                    }
+                    
+                    if (r.stopLossPrice > r.currentPrice)
+                    {
+                        _logger.LogWarning("Fixing Buy SL that was above current price: {Pair}", r.pair);
+                        r.stopLossPrice = r.currentPrice * 0.99m;
+                    }
+                }
+                else if (r.direction.Equals("Sell", StringComparison.OrdinalIgnoreCase))
+                {
+                    // For Sell, TP should be below current, SL above
+                    if (r.takeProfitPrice > r.currentPrice)
+                    {
+                        _logger.LogWarning("Fixing Sell TP that was above current price: {Pair}", r.pair);
+                        r.takeProfitPrice = r.currentPrice * 0.99m;
+                    }
+                    
+                    if (r.stopLossPrice < r.currentPrice)
+                    {
+                        _logger.LogWarning("Fixing Sell SL that was below current price: {Pair}", r.pair);
+                        r.stopLossPrice = r.currentPrice * 1.01m;
+                    }
+                }
                         
                 if (string.IsNullOrEmpty(r.direction))
                     r.direction = "None";
