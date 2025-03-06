@@ -113,6 +113,29 @@ public class Program
         })
         .WithName("GetForexSentiment")
         .WithOpenApi();
+        
+        // Diagnostic endpoint to check Perplexity API configuration
+        app.MapGet("/api/diagnostics/perplexity-config", 
+            (IConfiguration configuration, ILogger<Program> logger) =>
+        {
+            var apiKey = configuration["Perplexity:ApiKey"] ?? 
+                         configuration["TRADER_PERPLEXITY_API_KEY"];
+                
+            var configStatus = new
+            {
+                ApiKeyConfigured = !string.IsNullOrEmpty(apiKey),
+                ApiKeyLength = apiKey?.Length ?? 0,
+                ApiKeyPrefix = apiKey?.Length > 4 ? apiKey[..4] + "..." : "N/A",
+                EnvironmentVariablePresent = !string.IsNullOrEmpty(configuration["TRADER_PERPLEXITY_API_KEY"]),
+                AppSettingsPresent = !string.IsNullOrEmpty(configuration["Perplexity:ApiKey"])
+            };
+            
+            logger.LogInformation("Perplexity API configuration check: {ConfigStatus}", configStatus);
+            
+            return Results.Ok(configStatus);
+        })
+        .WithName("CheckPerplexityConfig")
+        .WithOpenApi();
 
         app.Run();
     }

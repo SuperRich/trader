@@ -69,11 +69,37 @@ public class PerplexitySentimentAnalyzer : ISentimentAnalyzer
                 JsonSerializer.Serialize(requestBody),
                 Encoding.UTF8,
                 "application/json");
-
-            var response = await _httpClient.PostAsync("chat/completions", content);
-            response.EnsureSuccessStatusCode();
+                
+            // Ensure the Authorization header is set for each request
+            // Some HttpClient implementations might reset headers between requests
+            var request = new HttpRequestMessage(HttpMethod.Post, "chat/completions")
+            {
+                Content = content
+            };
+            
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            
+            _logger.LogInformation("Sending request to Perplexity API for {CurrencyPair} with auth header: {AuthHeader}", 
+                currencyPair, request.Headers.Authorization?.ToString() ?? "None");
+                
+            var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger.LogError("Perplexity API request failed with status {StatusCode}: {ErrorMessage}", 
+                    response.StatusCode, errorContent);
+                
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                {
+                    _logger.LogError("Authorization failed. API Key: {ApiKey} (first/last 4 chars)", 
+                        _apiKey.Length > 8 ? $"{_apiKey[..4]}...{_apiKey[^4..]}" : "Too short");
+                }
+                
+                response.EnsureSuccessStatusCode(); // This will throw and be caught by the catch block
+            }
 
             var responseString = await response.Content.ReadAsStringAsync();
+            _logger.LogDebug("Received response: {Response}", responseString);
             var responseObject = JsonSerializer.Deserialize<PerplexityResponse>(responseString);
             
             if (responseObject?.choices == null || responseObject.choices.Length == 0)

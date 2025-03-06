@@ -70,6 +70,34 @@ dotnet user-secrets set "Perplexity:ApiKey" "your-api-key-here"
 
 For production environments, consider using Azure Key Vault to store your API key.
 
+### Troubleshooting Perplexity API Authorization
+
+If you encounter "Unauthorized" errors when using the sentiment analysis:
+
+1. Verify your API key is set correctly:
+   - Use the diagnostic endpoint `/api/diagnostics/perplexity-config` to check if your API key is being detected
+   - Ensure the API key starts with "pplx-" (this is the standard prefix for Perplexity API keys)
+   - Check that your API key hasn't expired or been revoked
+
+2. Common issues:
+   - API key not being loaded from environment variables - try restarting your terminal/command prompt
+   - Incorrect format - ensure there are no extra spaces or characters
+   - Rate limiting - Perplexity may limit requests on free or trial plans
+
+3. Testing the API directly:
+   ```bash
+   curl -X POST https://api.perplexity.ai/chat/completions \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer YOUR_API_KEY" \
+     -d '{
+       "model": "llama-3-sonar-large-32k-online",
+       "messages": [
+         {"role": "system", "content": "You are a helpful assistant."},
+         {"role": "user", "content": "Hello, how are you?"}
+       ]
+     }'
+   ```
+
 ### Running the Application
 
 1. Clone the repository
