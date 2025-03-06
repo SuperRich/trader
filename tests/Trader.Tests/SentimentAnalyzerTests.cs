@@ -163,4 +163,80 @@ public class SentimentAnalyzerTests
         result.Sentiment.Should().Be(SentimentType.Neutral);
         result.Factors.Should().ContainSingle(f => f == "Error fetching sentiment data");
     }
+    
+    /// <summary>
+    /// Test that GetTradingRecommendationsAsync correctly parses a successful response.
+    /// </summary>
+    [Fact]
+    public async Task GetTradingRecommendationsAsync_WithValidResponse_ReturnsExpectedResult()
+    {
+        // Arrange
+        var responseJson = @"{
+            ""id"": ""456"",
+            ""model"": ""llama-3-sonar-large-32k-online"",
+            ""choices"": [
+                {
+                    ""index"": 0,
+                    ""message"": {
+                        ""role"": ""assistant"",
+                        ""content"": ""Based on my analysis of the current forex market, here are the most promising trading opportunities:\n\n```json\n{\n  \""recommendations\"": [\n    {\n      \""pair\"": \""EURUSD\"",\n      \""direction\"": \""Buy\"",\n      \""sentiment\"": \""bullish\"",\n      \""confidence\"": 0.85,\n      \""currentPrice\"": 1.0925,\n      \""takeProfitPrice\"": 1.1050,\n      \""stopLossPrice\"": 1.0850,\n      \""factors\"": [\n        \""ECB hawkish stance\"",\n        \""USD weakness on Fed rate cut expectations\"",\n        \""Technical breakout above 1.0900 resistance\""      \n      ],\n      \""rationale\"": \""EURUSD shows bullish momentum as the ECB maintains a hawkish policy while the Fed signals potential rate cuts. Price has broken key resistance at 1.0900.\""      \n    },\n    {\n      \""pair\"": \""GBPJPY\"",\n      \""direction\"": \""Sell\"",\n      \""sentiment\"": \""bearish\"",\n      \""confidence\"": 0.75,\n      \""currentPrice\"": 190.50,\n      \""takeProfitPrice\"": 188.00,\n      \""stopLossPrice\"": 191.75,\n      \""factors\"": [\n        \""Overbought conditions on daily chart\"",\n        \""BOJ hawkish shift in policy\"",\n        \""UK economic slowdown\""      \n      ],\n      \""rationale\"": \""GBPJPY shows signs of exhaustion after a strong rally, with the BOJ adopting a more hawkish stance while UK economic data disappoints.\""      \n    }\n  ]\n}\n```\n\nThese recommendations are based on current market conditions, technical analysis, and fundamental factors. Always conduct your own analysis and use proper risk management before entering any trades.""
+                    }
+                }
+            ]
+        }";
+        
+        _mockHttp.When(HttpMethod.Post, "https://api.perplexity.ai/chat/completions")
+            .Respond("application/json", responseJson);
+        
+        // Act
+        var result = await _sentimentAnalyzer.GetTradingRecommendationsAsync(2);
+        
+        // Assert
+        result.Should().NotBeNull();
+        result.Should().HaveCount(2);
+        
+        // Verify first recommendation
+        var firstRec = result[0];
+        firstRec.CurrencyPair.Should().Be("EURUSD");
+        firstRec.Direction.Should().Be("Buy");
+        firstRec.Sentiment.Should().Be(SentimentType.Bullish);
+        firstRec.Confidence.Should().Be(0.85m);
+        firstRec.CurrentPrice.Should().Be(1.0925m);
+        firstRec.TakeProfitPrice.Should().Be(1.1050m);
+        firstRec.StopLossPrice.Should().Be(1.0850m);
+        firstRec.Factors.Should().HaveCount(3);
+        firstRec.Rationale.Should().Contain("EURUSD shows bullish momentum");
+        
+        // Verify second recommendation
+        var secondRec = result[1];
+        secondRec.CurrencyPair.Should().Be("GBPJPY");
+        secondRec.Direction.Should().Be("Sell");
+        secondRec.Sentiment.Should().Be(SentimentType.Bearish);
+        secondRec.Confidence.Should().Be(0.75m);
+        secondRec.CurrentPrice.Should().Be(190.50m);
+        secondRec.RiskRewardRatio.Should().BeApproximately((190.50m - 188.00m) / (191.75m - 190.50m), 0.001m);
+    }
+    
+    /// <summary>
+    /// Test that GetTradingRecommendationsAsync handles API errors gracefully.
+    /// </summary>
+    [Fact]
+    public async Task GetTradingRecommendationsAsync_WhenApiErrors_ReturnsFallbackResult()
+    {
+        // Arrange - Set up the HttpClient mock to simulate a failure
+        _mockHttp.When(HttpMethod.Post, "https://api.perplexity.ai/chat/completions")
+            .Respond(HttpStatusCode.InternalServerError);
+        
+        // Act
+        var result = await _sentimentAnalyzer.GetTradingRecommendationsAsync();
+        
+        // Assert
+        result.Should().NotBeNull();
+        result.Should().HaveCount(1);
+        result[0].CurrencyPair.Should().Be("EURUSD");
+        result[0].Direction.Should().Be("None");
+        result[0].Sentiment.Should().Be(SentimentType.Neutral);
+        result[0].Factors.Should().ContainSingle(f => f == "Error fetching recommendations");
+        result[0].Rationale.Should().Be("Could not retrieve trading recommendations at this time");
+    }
 }

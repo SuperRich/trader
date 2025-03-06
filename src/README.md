@@ -23,6 +23,11 @@ A C# backend application for analyzing forex charts at different timeframes (5mi
   - 1 hour
   - 4 hour
   - 1 day
+- AI-powered market analysis:
+  - Sentiment analysis for any forex pair
+  - Trading recommendations with precise TP/SL levels
+  - Live market price data fetched in real-time
+  - Risk/reward calculation and trade rationale
 
 ## API Endpoints
 
@@ -30,6 +35,7 @@ A C# backend application for analyzing forex charts at different timeframes (5mi
 - `GET /api/forex/multi-timeframe/{currencyPair}` - Get predictions across all timeframes for a currency pair
 - `GET /api/forex/candles/{currencyPair}/{timeframe}/{count}` - Get historical candle data
 - `GET /api/forex/sentiment/{currencyPair}` - Get market sentiment analysis using Perplexity AI
+- `GET /api/forex/recommendations?count=3` - Get recommended forex pairs to trade with real-time prices, entry, TP, and SL levels
 
 ## Setup Instructions
 

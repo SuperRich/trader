@@ -136,6 +136,19 @@ public class Program
         .WithName("GetForexSentiment")
         .WithOpenApi();
         
+        // Endpoint to get recommended forex trading opportunities
+        app.MapGet("/api/forex/recommendations", 
+            async (int? count, ISentimentAnalyzer sentimentAnalyzer) =>
+        {
+            // Limit to reasonable values, default to 3
+            var pairCount = count.HasValue && count.Value > 0 && count.Value <= 5 ? count.Value : 3;
+            
+            var recommendations = await sentimentAnalyzer.GetTradingRecommendationsAsync(pairCount);
+            return Results.Ok(recommendations);
+        })
+        .WithName("GetForexRecommendations")
+        .WithOpenApi();
+        
         // Diagnostic endpoint to set Perplexity API key directly
         app.MapPost("/api/diagnostics/set-perplexity-key", 
             async (KeyRequest request, IConfiguration configuration, ILogger<Program> logger) =>

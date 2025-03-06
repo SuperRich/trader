@@ -23,7 +23,10 @@ public class PerplexitySentimentAnalyzer : ISentimentAnalyzer
     /// <param name="configuration">Configuration containing the Perplexity API key.</param>
     /// <param name="logger">Logger for capturing errors and information.</param>
     /// <exception cref="ArgumentNullException">Thrown when the API key is not found in configuration.</exception>
-    public PerplexitySentimentAnalyzer(HttpClient httpClient, IConfiguration configuration, ILogger<PerplexitySentimentAnalyzer> logger)
+    public PerplexitySentimentAnalyzer(
+        HttpClient httpClient, 
+        IConfiguration configuration, 
+        ILogger<PerplexitySentimentAnalyzer> logger)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         // Try to get the API key from configuration (checking both regular config and environment variables)
@@ -149,6 +152,147 @@ public class PerplexitySentimentAnalyzer : ISentimentAnalyzer
             };
         }
     }
+    
+    /// <summary>
+    /// Gets recommended forex trading opportunities based on current market conditions.
+    /// </summary>
+    /// <param name="count">The number of recommendations to return.</param>
+    /// <returns>A list of trading recommendations for the most promising forex pairs.</returns>
+    public async Task<List<ForexRecommendation>> GetTradingRecommendationsAsync(int count = 3)
+    {
+        try
+        {
+            // First, we'll use Perplexity to get both current market prices and trading recommendations
+
+            var prompt = $@"
+I need you to act as a financial market expert and provide me with {count} forex trading recommendations.
+
+First, find the CURRENT, REAL-TIME prices for these major forex pairs: EURUSD, GBPUSD, USDJPY, GBPJPY, AUDUSD, USDCAD, EURJPY, EURGBP, USDCHF, NZDUSD.
+
+Then, based on these REAL MARKET PRICES and your analysis:
+1. Choose the most promising pairs to trade right now
+2. For each pair, recommend whether to Buy or Sell
+3. Provide the current market price you found
+4. Calculate appropriate take profit (TP) and stop loss (SL) levels
+5. Make sure your TP/SL levels are logical and respect key technical levels
+6. Provide a clear rationale based on technical analysis, support/resistance, or fundamental factors
+
+Format your response as JSON with this structure:
+```json
+{{
+  ""recommendations"": [
+    {{
+      ""pair"": ""EURUSD"",
+      ""direction"": ""Buy"",
+      ""sentiment"": ""bullish"",
+      ""confidence"": 0.85,
+      ""currentPrice"": 1.0925,
+      ""takeProfitPrice"": 1.1050,
+      ""stopLossPrice"": 1.0850,
+      ""factors"": [
+        ""Key technical reason"",
+        ""Important fundamental factor""
+      ],
+      ""rationale"": ""Concise trading rationale with specific levels and reasons""
+    }}
+  ]
+}}
+```
+
+Show me the {count} most promising trades with the highest probability of success, based on ACTUAL CURRENT MARKET PRICES.";
+
+            var requestBody = new
+            {
+                model = "sonar", // Using current model from Perplexity docs
+                messages = new[]
+                {
+                    new { role = "system", content = "You are an expert forex trader with access to real-time market data. Provide accurate, up-to-date trading recommendations based on current prices, technical analysis, and market conditions. Always use real market data." },
+                    new { role = "user", content = prompt }
+                },
+                temperature = 0.2,
+                max_tokens = 1500
+            };
+
+            var content = new StringContent(
+                JsonSerializer.Serialize(requestBody),
+                Encoding.UTF8,
+                "application/json");
+                
+            var request = new HttpRequestMessage(HttpMethod.Post, "chat/completions")
+            {
+                Content = content
+            };
+            
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            
+            _logger.LogInformation("Sending recommendation request to Perplexity API for {Count} forex pairs with live price data", count);
+                
+            var response = await _httpClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+
+            var responseString = await response.Content.ReadAsStringAsync();
+            _logger.LogDebug("Received recommendations response: {Response}", responseString);
+            var responseObject = JsonSerializer.Deserialize<PerplexityResponse>(responseString);
+            
+            if (responseObject?.choices == null || responseObject.choices.Length == 0)
+            {
+                throw new Exception("Invalid response from Perplexity API");
+            }
+
+            // Extract the JSON from the response text
+            var responseContent = responseObject.choices[0].message.content;
+            var jsonStartIndex = responseContent.IndexOf('{');
+            var jsonEndIndex = responseContent.LastIndexOf('}');
+            
+            if (jsonStartIndex == -1 || jsonEndIndex == -1)
+            {
+                throw new Exception("Could not extract JSON from recommendations response");
+            }
+                
+            var jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
+            var recommendationsData = JsonSerializer.Deserialize<RecommendationsData>(jsonContent);
+            
+            if (recommendationsData?.recommendations == null)
+            {
+                throw new Exception("Could not parse recommendations data");
+            }
+
+            return recommendationsData.recommendations.Select(r => new ForexRecommendation
+            {
+                CurrencyPair = r.pair,
+                Direction = r.direction,
+                Sentiment = ParseSentiment(r.sentiment),
+                Confidence = r.confidence,
+                CurrentPrice = r.currentPrice,
+                TakeProfitPrice = r.takeProfitPrice,
+                StopLossPrice = r.stopLossPrice,
+                Factors = r.factors ?? new List<string>(),
+                Rationale = r.rationale,
+                Timestamp = DateTime.UtcNow
+            }).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting forex trading recommendations");
+            
+            // Fallback if recommendations fail
+            return new List<ForexRecommendation>
+            {
+                new ForexRecommendation
+                {
+                    CurrencyPair = "EURUSD",
+                    Direction = "None",
+                    Sentiment = SentimentType.Neutral,
+                    Confidence = 0.5m,
+                    CurrentPrice = 0m,
+                    TakeProfitPrice = 0m,
+                    StopLossPrice = 0m,
+                    Factors = new List<string> { "Error fetching recommendations" },
+                    Rationale = "Could not retrieve trading recommendations at this time"
+                }
+            };
+        }
+    }
 
     /// <summary>
     /// Parses a string sentiment indicator into the SentimentType enum.
@@ -198,5 +342,29 @@ public class PerplexitySentimentAnalyzer : ISentimentAnalyzer
         public decimal confidence { get; set; }
         public List<string>? factors { get; set; }
         public string summary { get; set; } = string.Empty;
+    }
+    
+    /// <summary>
+    /// Structure for parsing the recommendations data from the Perplexity response.
+    /// </summary>
+    private class RecommendationsData
+    {
+        public List<RecommendationItem> recommendations { get; set; } = new List<RecommendationItem>();
+    }
+    
+    /// <summary>
+    /// Structure for a single recommendation item.
+    /// </summary>
+    private class RecommendationItem
+    {
+        public string pair { get; set; } = string.Empty;
+        public string direction { get; set; } = string.Empty;
+        public string sentiment { get; set; } = string.Empty;
+        public decimal confidence { get; set; }
+        public decimal currentPrice { get; set; }
+        public decimal takeProfitPrice { get; set; }
+        public decimal stopLossPrice { get; set; }
+        public List<string>? factors { get; set; }
+        public string rationale { get; set; } = string.Empty;
     }
 }

@@ -11,6 +11,13 @@ public interface ISentimentAnalyzer
     /// <param name="currencyPair">The currency pair to analyze (e.g., "EURUSD", "GBPJPY").</param>
     /// <returns>A SentimentAnalysisResult containing sentiment data for the specified currency pair.</returns>
     Task<SentimentAnalysisResult> AnalyzeSentimentAsync(string currencyPair);
+    
+    /// <summary>
+    /// Gets recommended forex trading opportunities based on current market conditions.
+    /// </summary>
+    /// <param name="count">The number of recommendations to return (default: 3).</param>
+    /// <returns>A list of trading recommendations for the most promising forex pairs.</returns>
+    Task<List<ForexRecommendation>> GetTradingRecommendationsAsync(int count = 3);
 }
 
 /// <summary>
@@ -68,4 +75,65 @@ public class SentimentAnalysisResult
     /// The timestamp when the sentiment analysis was performed.
     /// </summary>
     public DateTime Timestamp { get; set; }
+}
+
+/// <summary>
+/// Contains a trading recommendation for a forex pair.
+/// </summary>
+public class ForexRecommendation
+{
+    /// <summary>
+    /// The currency pair for this recommendation (e.g., "EURUSD").
+    /// </summary>
+    public string CurrencyPair { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// The recommended trade direction (Buy or Sell).
+    /// </summary>
+    public string Direction { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// The sentiment type for this recommendation.
+    /// </summary>
+    public SentimentType Sentiment { get; set; }
+    
+    /// <summary>
+    /// Confidence score for this recommendation (0.0 to 1.0).
+    /// </summary>
+    public decimal Confidence { get; set; }
+    
+    /// <summary>
+    /// Current price at time of recommendation.
+    /// </summary>
+    public decimal CurrentPrice { get; set; }
+    
+    /// <summary>
+    /// Recommended take profit level.
+    /// </summary>
+    public decimal TakeProfitPrice { get; set; }
+    
+    /// <summary>
+    /// Recommended stop loss level.
+    /// </summary>
+    public decimal StopLossPrice { get; set; }
+    
+    /// <summary>
+    /// Potential risk-reward ratio for this trade.
+    /// </summary>
+    public decimal RiskRewardRatio => Math.Abs((TakeProfitPrice - CurrentPrice) / (CurrentPrice - StopLossPrice));
+    
+    /// <summary>
+    /// Key factors supporting this recommendation.
+    /// </summary>
+    public List<string> Factors { get; set; } = new List<string>();
+    
+    /// <summary>
+    /// Brief trading rationale.
+    /// </summary>
+    public string Rationale { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Timestamp of when this recommendation was generated.
+    /// </summary>
+    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
 }
