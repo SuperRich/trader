@@ -50,19 +50,17 @@ public class PerplexitySentimentAnalyzer : ISentimentAnalyzer
         {
             var prompt = $"Analyze the current market sentiment for the {currencyPair} forex pair. Consider recent economic news, technical analysis, and market trends. Provide a summary of bullish and bearish factors, and conclude with whether the overall sentiment is bullish, bearish, or neutral. Format your response as JSON with the following structure: {{\"sentiment\": \"bullish|bearish|neutral\", \"confidence\": 0.0-1.0, \"factors\": [list of factors], \"summary\": \"brief summary\"}}";
 
+            // Using current Perplexity API models from https://docs.perplexity.ai/guides/model-cards
             var requestBody = new
             {
-                model = "llama-3-sonar-large-32k-online",
+                model = "sonar", // Using current model from Perplexity docs
                 messages = new[]
                 {
                     new { role = "system", content = "You are a financial analyst specializing in forex markets. Provide objective analysis with current data." },
                     new { role = "user", content = prompt }
                 },
-                options = new
-                {
-                    temperature = 0.2,
-                    max_tokens = 1000
-                }
+                temperature = 0.1,
+                max_tokens = 1000
             };
 
             var content = new StringContent(

@@ -63,14 +63,30 @@ Use .NET User Secrets for development environments:
 
 ```bash
 cd src/Trader.Api
+dotnet user-secrets init  # Only needed if you haven't set up user secrets yet
 dotnet user-secrets set "Perplexity:ApiKey" "your-api-key-here"
 ```
+
+You can verify your secrets are set correctly:
+```bash
+dotnet user-secrets list
+```
+
+**Troubleshooting User Secrets:**
+- User secrets are tied to the `UserSecretsId` in the project file
+- Make sure you're running the commands from the correct directory (src/Trader.Api)
+- If using VS Code or another editor, restart it after setting secrets
+- User secrets are stored in a JSON file at:
+  - Windows: `%APPDATA%\Microsoft\UserSecrets\<user_secrets_id>\secrets.json`
+  - macOS/Linux: `~/.microsoft/usersecrets/<user_secrets_id>/secrets.json`
 
 #### Option 3: Azure Key Vault (Production)
 
 For production environments, consider using Azure Key Vault to store your API key.
 
 ### Troubleshooting Perplexity API Authorization
+
+> **Note**: We use the `sonar` model from Perplexity's API. If this model becomes unavailable, you may need to update the code to use a different model from their [current model list](https://docs.perplexity.ai/guides/model-cards).
 
 If you encounter "Unauthorized" errors when using the sentiment analysis:
 
@@ -84,13 +100,27 @@ If you encounter "Unauthorized" errors when using the sentiment analysis:
    - Incorrect format - ensure there are no extra spaces or characters
    - Rate limiting - Perplexity may limit requests on free or trial plans
 
+3. **Quick API Key Fix**: 
+   - Use our special helper endpoint to verify and set your key:
+   ```bash
+   curl -X POST http://localhost:5000/api/diagnostics/set-perplexity-key \
+     -H "Content-Type: application/json" \
+     -d '{"apiKey": "your-pplx-key-here", "saveToUserSecrets": true}'
+   ```
+   - This endpoint:
+     - Verifies your key with the Perplexity API
+     - Saves valid keys to your user secrets
+     - Creates a .env file with the key (as TRADER_PERPLEXITY_API_KEY)
+     - Updates appsettings.Development.json (if it exists)
+   - After setting the key, restart the application for it to take effect
+
 3. Testing the API directly:
    ```bash
    curl -X POST https://api.perplexity.ai/chat/completions \
      -H "Content-Type: application/json" \
      -H "Authorization: Bearer YOUR_API_KEY" \
      -d '{
-       "model": "llama-3-sonar-large-32k-online",
+       "model": "sonar",
        "messages": [
          {"role": "system", "content": "You are a helpful assistant."},
          {"role": "user", "content": "Hello, how are you?"}
