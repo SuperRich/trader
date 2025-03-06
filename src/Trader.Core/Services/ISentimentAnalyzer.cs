@@ -120,7 +120,27 @@ public class ForexRecommendation
     /// <summary>
     /// Potential risk-reward ratio for this trade.
     /// </summary>
-    public decimal RiskRewardRatio => Math.Abs((TakeProfitPrice - CurrentPrice) / (CurrentPrice - StopLossPrice));
+    public decimal RiskRewardRatio 
+    { 
+        get
+        {
+            // Handle cases where values are 0 or denominator would be 0
+            if (CurrentPrice == 0 || StopLossPrice == 0 || TakeProfitPrice == 0 || CurrentPrice == StopLossPrice)
+                return 0;
+                
+            // Calculate reward (distance to take profit)
+            decimal reward = Math.Abs(TakeProfitPrice - CurrentPrice);
+            
+            // Calculate risk (distance to stop loss)
+            decimal risk = Math.Abs(CurrentPrice - StopLossPrice);
+            
+            // Avoid division by zero
+            if (risk == 0)
+                return 0;
+                
+            return reward / risk;
+        }
+    }
     
     /// <summary>
     /// Key factors supporting this recommendation.

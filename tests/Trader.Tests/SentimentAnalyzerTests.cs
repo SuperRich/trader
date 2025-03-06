@@ -214,7 +214,46 @@ public class SentimentAnalyzerTests
         secondRec.Sentiment.Should().Be(SentimentType.Bearish);
         secondRec.Confidence.Should().Be(0.75m);
         secondRec.CurrentPrice.Should().Be(190.50m);
-        secondRec.RiskRewardRatio.Should().BeApproximately((190.50m - 188.00m) / (191.75m - 190.50m), 0.001m);
+        
+        // Calculate expected risk reward ratio and verify
+        decimal reward = Math.Abs(188.00m - 190.50m); // TP distance
+        decimal risk = Math.Abs(191.75m - 190.50m);   // SL distance
+        decimal expectedRatio = reward / risk;
+        secondRec.RiskRewardRatio.Should().BeApproximately(expectedRatio, 0.001m);
+    }
+    
+    /// <summary>
+    /// Test that RiskRewardRatio handles potential divide-by-zero scenarios.
+    /// </summary>
+    [Fact]
+    public void RiskRewardRatio_WhenDivideByZeroIsPossible_ReturnsZeroInstead()
+    {
+        // Arrange
+        var recommendation = new ForexRecommendation
+        {
+            CurrencyPair = "EURUSD",
+            CurrentPrice = 1.1000m,
+            StopLossPrice = 1.1000m, // Same as current price - would cause divide by zero
+            TakeProfitPrice = 1.1100m
+        };
+        
+        // Act - this should not throw an exception
+        var ratio = recommendation.RiskRewardRatio;
+        
+        // Assert
+        ratio.Should().Be(0);
+        
+        // Test zero values too
+        recommendation.CurrentPrice = 0;
+        recommendation.RiskRewardRatio.Should().Be(0);
+        
+        recommendation.CurrentPrice = 1.1000m;
+        recommendation.TakeProfitPrice = 0;
+        recommendation.RiskRewardRatio.Should().Be(0);
+        
+        recommendation.TakeProfitPrice = 1.1100m;
+        recommendation.StopLossPrice = 0;
+        recommendation.RiskRewardRatio.Should().Be(0);
     }
     
     /// <summary>
@@ -237,6 +276,13 @@ public class SentimentAnalyzerTests
         result[0].Direction.Should().Be("None");
         result[0].Sentiment.Should().Be(SentimentType.Neutral);
         result[0].Factors.Should().ContainSingle(f => f == "Error fetching recommendations");
-        result[0].Rationale.Should().Be("Could not retrieve trading recommendations at this time");
+        
+        // Check that we have non-zero price values to avoid divide-by-zero
+        result[0].CurrentPrice.Should().NotBe(0);
+        result[0].TakeProfitPrice.Should().NotBe(0);
+        result[0].StopLossPrice.Should().NotBe(0);
+        result[0].CurrentPrice.Should().NotBe(result[0].StopLossPrice); // Ensure no divide by zero
+        result[0].RiskRewardRatio.Should().Be(1.0m); // 1.01-1.0 / 1.0-0.99 = 0.01/0.01 = 1.0
+        result[0].Rationale.Should().Contain("Could not retrieve trading recommendations");
     }
 }
