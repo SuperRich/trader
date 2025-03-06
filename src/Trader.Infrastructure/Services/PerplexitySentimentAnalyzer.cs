@@ -30,9 +30,15 @@ public class PerplexitySentimentAnalyzer : ISentimentAnalyzer
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         // Try to get the API key from configuration (checking both regular config and environment variables)
-        _apiKey = configuration["Perplexity:ApiKey"] ?? 
-                 configuration["TRADER_PERPLEXITY_API_KEY"] ?? 
-                 throw new ArgumentNullException(nameof(configuration), "Perplexity API key is required");
+        var perplexityApiKey = configuration["Perplexity:ApiKey"];
+        var envApiKey = configuration["TRADER_PERPLEXITY_API_KEY"];
+        
+        if (!string.IsNullOrEmpty(perplexityApiKey))
+            _apiKey = perplexityApiKey;
+        else if (!string.IsNullOrEmpty(envApiKey))
+            _apiKey = envApiKey;
+        else
+            throw new ArgumentNullException(nameof(configuration), "Perplexity API key is required");
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         
         // Set up HttpClient
@@ -131,7 +137,7 @@ public class PerplexitySentimentAnalyzer : ISentimentAnalyzer
                 CurrencyPair = currencyPair,
                 Sentiment = ParseSentiment(sentimentData.sentiment),
                 Confidence = sentimentData.confidence,
-                Factors = sentimentData.factors ?? new List<string>(),
+                Factors = sentimentData.factors != null ? sentimentData.factors : new List<string>(),
                 Summary = sentimentData.summary,
                 Timestamp = DateTime.UtcNow
             };
@@ -288,7 +294,7 @@ Give me the {count} most promising forex trades based on current market prices."
             jsonContent = System.Text.RegularExpressions.Regex.Replace(jsonContent, ",\\s*\\]", "]");
             _logger.LogInformation("Extracted JSON: {Json}", jsonContent);
             
-            RecommendationsData recommendationsData;
+            RecommendationsData? recommendationsData;
             try
             {
                 // Try to deserialize with our standard class first
@@ -494,7 +500,7 @@ Give me the {count} most promising forex trades based on current market prices."
             }
             
             // Now map to ForexRecommendation objects
-            var recommendations = validRecommendations
+            var recommendations2 = validRecommendations
                 .Select(r => new ForexRecommendation
                 {
                     CurrencyPair = r.pair,
@@ -504,15 +510,15 @@ Give me the {count} most promising forex trades based on current market prices."
                     CurrentPrice = r.currentPrice,
                     TakeProfitPrice = r.takeProfitPrice,
                     StopLossPrice = r.stopLossPrice,
-                    Factors = r.factors ?? new List<string>(),
-                    Rationale = r.rationale ?? "Trading recommendation based on current market analysis",
+                    Factors = r.factors != null ? r.factors : new List<string>(),
+                    Rationale = !string.IsNullOrEmpty(r.rationale) ? r.rationale : "Trading recommendation based on current market analysis",
                     Timestamp = DateTime.UtcNow
                 })
                 .ToList();
                 
             // At this point, we're guaranteed to have at least one recommendation due to
             // the safety check in validRecommendations, so we don't need another fallback here
-            return recommendations;
+            return recommendations2;
         }
         catch (Exception ex)
         {
