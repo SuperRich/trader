@@ -185,7 +185,8 @@ STEP 2: Based on these verified prices and your analysis:
 - Calculate take profit (TP) price based on key technical resistance/support levels
 - Calculate stop loss (SL) price based on key technical resistance/support levels
 - Ensure TP and SL are at logical price levels with a reasonable risk-reward ratio (at least 1:1)
-- Include the source(s) you used to verify the price data in the rationale
+- IMPORTANT: Provide the exact URLs of the sources you used to verify the price data in a separate ""sources"" array
+- Each source URL must be a complete, clickable link (e.g., ""https://www.example.com/forex"")
 
 STEP 3: Format your entire response as VALID JSON with this exact structure:
 
@@ -203,7 +204,11 @@ STEP 3: Format your entire response as VALID JSON with this exact structure:
         ""Key technical reason"",
         ""Important fundamental factor""
       ],
-      ""rationale"": ""Concise trading rationale with verified price sources and levels""
+      ""rationale"": ""Concise trading rationale with analysis of price levels"",
+      ""sources"": [
+        ""https://www.investing.com/currencies/eur-usd"",
+        ""https://www.forexlive.com/technical-analysis/eur-usd-technical-analysis""
+      ]
     }}
   ]
 }}
@@ -215,15 +220,17 @@ VERIFICATION REQUIREMENTS:
 4. Make sure TP and SL levels are realistic distances from current price (not too tight or too wide)
 5. Buy direction should have TP higher than current price and SL lower
 6. Sell direction should have TP lower than current price and SL higher
+7. IMPORTANT: Each recommendation MUST include 2-4 valid, clickable source URLs in the ""sources"" array
 
 RESPONSE RULES:
 1. Your entire response must be ONLY the JSON object - no intro text, no explanations
 2. All price values must be non-zero decimal numbers with appropriate precision
 3. Include exactly {count} recommendations
 4. Sentiment must accurately match direction (bullish for Buy, bearish for Sell, or neutral)
-5. Each recommendation must have all fields shown in the example
+5. Each recommendation must have all fields shown in the example, including the sources array
+6. All source URLs must be complete and valid (starting with http:// or https://)
 
-Give me the {count} most promising forex trades with VERIFIED, ACCURATE price data.";
+Give me the {count} most promising forex trades with VERIFIED, ACCURATE price data with source URLs.";
 
             var requestBody = new
             {
@@ -395,6 +402,21 @@ YOU MUST:
                                     }
                                 }
                                 
+                                // Handle sources array
+                                if (item.TryGetProperty("sources", out var sourcesProp) && sourcesProp.ValueKind == JsonValueKind.Array)
+                                {
+                                    rec.sources = new List<string>();
+                                    foreach (var source in sourcesProp.EnumerateArray())
+                                    {
+                                        if (source.ValueKind == JsonValueKind.String)
+                                            rec.sources.Add(source.GetString() ?? "");
+                                    }
+                                }
+                                else
+                                {
+                                    rec.sources = new List<string>();
+                                }
+                                
                                 recommendations.Add(rec);
                             }
                             catch (Exception ex)
@@ -444,7 +466,8 @@ YOU MUST:
                                 takeProfitPrice = pair.Contains("JPY") ? 151.0m : 1.11m,
                                 stopLossPrice = pair.Contains("JPY") ? 149.0m : 1.09m,
                                 rationale = "Extracted from Perplexity analysis. Check market conditions before trading.",
-                                factors = new List<string> { "Extracted from partial response", "Check current market conditions" }
+                                factors = new List<string> { "Extracted from partial response", "Check current market conditions" },
+                                sources = new List<string>()
                             };
                             
                             fallbackRecItems.Add(rec);
@@ -467,7 +490,8 @@ YOU MUST:
                             takeProfitPrice = 1.11m,
                             stopLossPrice = 1.09m,
                             rationale = "Default recommendation. Please retry for accurate analysis.",
-                            factors = new List<string> { "Default fallback recommendation" }
+                            factors = new List<string> { "Default fallback recommendation" },
+                            sources = new List<string>()
                         });
                     }
                     
@@ -491,31 +515,31 @@ YOU MUST:
                 if (containsJpy)
                 {
                     // JPY pairs are typically around 100-200
-                    if (r.currentPrice < 50 || r.currentPrice > 250)
+                    if (r.currentPrice < 50m || r.currentPrice > 250m)
                     {
                         _logger.LogWarning("Suspicious JPY price detected: {Pair} at {Price} - this is outside normal range", 
                             r.pair, r.currentPrice);
                             
                         // If price is just wrong by magnitude (decimal point)
-                        if (r.currentPrice < 1 && r.currentPrice > 0)
+                        if (r.currentPrice < 1m && r.currentPrice > 0m)
                         {
                             _logger.LogInformation("Fixing JPY price magnitude (too small): {Pair} from {OldPrice} to {NewPrice}", 
                                 r.pair, r.currentPrice, r.currentPrice * 100);
                             r.currentPrice *= 100;
                             
                             // Also fix TP/SL if they need the same adjustment
-                            if (r.takeProfitPrice < 1) r.takeProfitPrice *= 100;
-                            if (r.stopLossPrice < 1) r.stopLossPrice *= 100;
+                            if (r.takeProfitPrice < 1m) r.takeProfitPrice *= 100m;
+                            if (r.stopLossPrice < 1m) r.stopLossPrice *= 100m;
                         }
-                        else if (r.currentPrice > 1000)
+                        else if (r.currentPrice > 1000m)
                         {
                             _logger.LogInformation("Fixing JPY price magnitude (too large): {Pair} from {OldPrice} to {NewPrice}", 
                                 r.pair, r.currentPrice, r.currentPrice / 10);
                             r.currentPrice /= 10;
                             
                             // Also fix TP/SL if they need the same adjustment
-                            if (r.takeProfitPrice > 1000) r.takeProfitPrice /= 10;
-                            if (r.stopLossPrice > 1000) r.stopLossPrice /= 10;
+                            if (r.takeProfitPrice > 1000m) r.takeProfitPrice /= 10m;
+                            if (r.stopLossPrice > 1000m) r.stopLossPrice /= 10m;
                         }
                         else
                         {
@@ -526,31 +550,31 @@ YOU MUST:
                 else
                 {
                     // Most other pairs are in 0.5-2.0 range
-                    if (r.currentPrice > 10 || r.currentPrice < 0.1)
+                    if (r.currentPrice > 10m || r.currentPrice < 0.1m)
                     {
                         _logger.LogWarning("Suspicious price detected: {Pair} at {Price} - this is outside normal range", 
                             r.pair, r.currentPrice);
                             
                         // If price is just wrong by magnitude (decimal point)
-                        if (r.currentPrice > 10 && r.currentPrice < 1000)
+                        if (r.currentPrice > 10m && r.currentPrice < 1000m)
                         {
                             _logger.LogInformation("Fixing price magnitude (too large): {Pair} from {OldPrice} to {NewPrice}", 
                                 r.pair, r.currentPrice, r.currentPrice / 10);
                             r.currentPrice /= 10;
                             
                             // Also fix TP/SL if they need the same adjustment
-                            if (r.takeProfitPrice > 10) r.takeProfitPrice /= 10;
-                            if (r.stopLossPrice > 10) r.stopLossPrice /= 10;
+                            if (r.takeProfitPrice > 10m) r.takeProfitPrice /= 10m;
+                            if (r.stopLossPrice > 10m) r.stopLossPrice /= 10m;
                         }
-                        else if (r.currentPrice < 0.1 && r.currentPrice > 0.001)
+                        else if (r.currentPrice < 0.1m && r.currentPrice > 0.001m)
                         {
                             _logger.LogInformation("Fixing price magnitude (too small): {Pair} from {OldPrice} to {NewPrice}", 
                                 r.pair, r.currentPrice, r.currentPrice * 10);
                             r.currentPrice *= 10;
                             
                             // Also fix TP/SL if they need the same adjustment
-                            if (r.takeProfitPrice < 0.1) r.takeProfitPrice *= 10;
-                            if (r.stopLossPrice < 0.1) r.stopLossPrice *= 10;
+                            if (r.takeProfitPrice < 0.1m) r.takeProfitPrice *= 10m;
+                            if (r.stopLossPrice < 0.1m) r.stopLossPrice *= 10m;
                         }
                         else
                         {
@@ -567,13 +591,13 @@ YOU MUST:
                 }
                     
                 // Fix invalid TP/SL
-                if (r.takeProfitPrice <= 0 || Math.Abs(r.takeProfitPrice - r.currentPrice) < 0.0001m)
+                if (r.takeProfitPrice <= 0m || Math.Abs(r.takeProfitPrice - r.currentPrice) < 0.0001m)
                 {
                     r.takeProfitPrice = r.direction.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? 
                         r.currentPrice * 1.01m : r.currentPrice * 0.99m;
                 }
                         
-                if (r.stopLossPrice <= 0 || Math.Abs(r.stopLossPrice - r.currentPrice) < 0.0001m)
+                if (r.stopLossPrice <= 0m || Math.Abs(r.stopLossPrice - r.currentPrice) < 0.0001m)
                 {
                     r.stopLossPrice = r.direction.Equals("Buy", StringComparison.OrdinalIgnoreCase) ? 
                         r.currentPrice * 0.99m : r.currentPrice * 1.01m;
@@ -624,7 +648,7 @@ YOU MUST:
             }).ToList();
             
             // Safety check - if all recommendations were filtered out, add a default one
-            if (validRecommendations.Count == 0)
+            if (validRecommendations.Count() == 0)
             {
                 _logger.LogWarning("No valid recommendations found after processing. Adding fallback recommendation.");
                 validRecommendations.Add(new RecommendationItem
@@ -637,7 +661,8 @@ YOU MUST:
                     takeProfitPrice = 1.11m,
                     stopLossPrice = 1.09m,
                     rationale = "Default recommendation. Please retry for accurate analysis.",
-                    factors = new List<string> { "Default fallback recommendation" }
+                    factors = new List<string> { "Default fallback recommendation" },
+                    sources = new List<string>()
                 });
             }
             
@@ -654,6 +679,7 @@ YOU MUST:
                     StopLossPrice = r.stopLossPrice,
                     Factors = r.factors != null ? r.factors : new List<string>(),
                     Rationale = !string.IsNullOrEmpty(r.rationale) ? r.rationale : "Trading recommendation based on current market analysis",
+                    Sources = r.sources != null ? r.sources : new List<string>(),
                     Timestamp = DateTime.UtcNow
                 })
                 .ToList();
@@ -679,6 +705,7 @@ YOU MUST:
                     TakeProfitPrice = 1.01m, // Above current price
                     StopLossPrice = 0.99m, // Below current price
                     Factors = new List<string> { "Error fetching recommendations" },
+                    Sources = new List<string>(),
                     Rationale = "Could not retrieve trading recommendations at this time. Please try again later."
                 }
             };
@@ -757,5 +784,6 @@ YOU MUST:
         public decimal stopLossPrice { get; set; }
         public List<string>? factors { get; set; }
         public string rationale { get; set; } = string.Empty;
+        public List<string>? sources { get; set; }
     }
 }

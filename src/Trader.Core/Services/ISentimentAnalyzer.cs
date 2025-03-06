@@ -153,6 +153,11 @@ public class ForexRecommendation
     public string Rationale { get; set; } = string.Empty;
     
     /// <summary>
+    /// List of source URLs for the data used in this recommendation.
+    /// </summary>
+    public List<string> Sources { get; set; } = new List<string>();
+    
+    /// <summary>
     /// Timestamp of when this recommendation was generated.
     /// </summary>
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
