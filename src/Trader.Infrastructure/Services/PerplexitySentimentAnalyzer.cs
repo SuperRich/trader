@@ -62,7 +62,7 @@ public class PerplexitySentimentAnalyzer : ISentimentAnalyzer
             // Using current Perplexity API models from https://docs.perplexity.ai/guides/model-cards
             var requestBody = new
             {
-                model = "sonar", // Using current model from Perplexity docs
+                model = "sonar-pro", // Using current model from Perplexity docs
                 messages = new[]
                 {
                     new { role = "system", content = "You are a financial analyst specializing in forex markets. Provide objective analysis with current data." },
@@ -234,7 +234,7 @@ Give me the {count} most promising forex trades with VERIFIED, ACCURATE price da
 
             var requestBody = new
             {
-                model = "sonar", // Using current model from Perplexity docs
+                model = "sonar-pro", // Using current model from Perplexity docs
                 messages = new[]
                 {
                     new { role = "system", content = @"You are an expert forex trader with access to real-time market data from multiple financial sources. 
