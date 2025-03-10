@@ -59,10 +59,10 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             // Fetch candle data for multiple timeframes
             var candleTasks = new[]
             {
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Minutes15, 30),
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 24),
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 20),
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Day1, 10)
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Minutes15, 20),
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 12),
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 8),
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Day1, 5)
             };
             
             // Wait for all data to be retrieved
@@ -83,7 +83,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                 model = "sonar-pro",
                 messages = new[]
                 {
-                    new { role = "system", content = "You are an expert trading analyst specializing in technical analysis and market sentiment. Provide concise, accurate trading advice based on chart data." },
+                    new { role = "system", content = "You are an expert trading analyst specializing in technical analysis and market sentiment. Provide concise, accurate trading advice based on chart data. Always verify your information with reliable sources and include citations when making claims about market conditions. Be precise with price levels and never make up information. If you're uncertain about specific data points, acknowledge the limitations of your information." },
                     new { role = "user", content = prompt }
                 },
                 temperature = 0.1,
@@ -118,26 +118,35 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             var jsonStartIndex = responseContent.IndexOf('{');
             var jsonEndIndex = responseContent.LastIndexOf('}');
             
-            if (jsonStartIndex == -1 || jsonEndIndex == -1)
+            if (jsonStartIndex >= 0 && jsonEndIndex > jsonStartIndex)
             {
-                throw new InvalidOperationException("Could not extract JSON from response");
-            }
+                var jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
+                var sentimentData = JsonSerializer.Deserialize<SentimentData>(jsonContent);
                 
-            var jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
-            var sentimentData = JsonSerializer.Deserialize<SentimentData>(jsonContent);
-            
-            if (sentimentData == null)
-            {
-                throw new InvalidOperationException("Could not parse sentiment data");
+                if (sentimentData != null)
+                {
+                    return new SentimentAnalysisResult
+                    {
+                        CurrencyPair = symbol,
+                        Sentiment = ParseSentiment(sentimentData.sentiment),
+                        Confidence = sentimentData.confidence,
+                        Factors = sentimentData.factors != null ? sentimentData.factors : new List<string>(),
+                        Summary = sentimentData.summary,
+                        Sources = sentimentData.sources != null ? sentimentData.sources : new List<string>(),
+                        Timestamp = DateTime.UtcNow
+                    };
+                }
             }
             
+            // Fallback if we couldn't parse the JSON
             return new SentimentAnalysisResult
             {
                 CurrencyPair = symbol,
-                Sentiment = ParseSentiment(sentimentData.sentiment),
-                Confidence = sentimentData.confidence,
-                Factors = sentimentData.factors ?? new List<string>(),
-                Summary = sentimentData.summary,
+                Sentiment = SentimentType.Neutral,
+                Confidence = 0.5m,
+                Factors = new List<string> { "Error parsing sentiment data" },
+                Summary = "Could not parse sentiment data from the response",
+                Sources = new List<string>(),
                 Timestamp = DateTime.UtcNow
             };
         }
@@ -294,22 +303,22 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         
         // Add 15-minute timeframe data
         sb.AppendLine("15-MINUTE TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles15m.OrderByDescending(c => c.Timestamp).Take(10));
+        AppendCandleData(sb, candles15m.OrderByDescending(c => c.Timestamp).Take(8));
         sb.AppendLine();
         
         // Add 1-hour timeframe data
         sb.AppendLine("1-HOUR TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles1h.OrderByDescending(c => c.Timestamp).Take(10));
+        AppendCandleData(sb, candles1h.OrderByDescending(c => c.Timestamp).Take(6));
         sb.AppendLine();
         
         // Add 4-hour timeframe data
         sb.AppendLine("4-HOUR TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles4h.OrderByDescending(c => c.Timestamp).Take(8));
+        AppendCandleData(sb, candles4h.OrderByDescending(c => c.Timestamp).Take(5));
         sb.AppendLine();
         
         // Add daily timeframe data
         sb.AppendLine("DAILY TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles1d.OrderByDescending(c => c.Timestamp).Take(5));
+        AppendCandleData(sb, candles1d.OrderByDescending(c => c.Timestamp).Take(3));
         sb.AppendLine();
         
         // Add instructions for analysis
@@ -318,20 +327,24 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine("2. Analyze price action trends and market structure on each timeframe");
         sb.AppendLine("3. Determine if any significant chart patterns are present");
         sb.AppendLine("4. Check if the charts indicate bullish or bearish sentiment");
-        sb.AppendLine("5. Provide reasonable stop loss and take profit levels based on support/resistance");
+        sb.AppendLine("5. Be precise with price levels and never make up information");
+        sb.AppendLine("6. If referencing external market conditions or news, cite reliable sources");
+        sb.AppendLine("7. Provide reasonable stop loss and take profit levels based on support/resistance");
         sb.AppendLine();
         
         // Request JSON format
-        sb.AppendLine("FORMAT YOUR RESPONSE AS JSON with the following structure:");
+        sb.AppendLine("RESPONSE FORMAT:");
+        sb.AppendLine("Provide your analysis as a JSON object with the following structure:");
         sb.AppendLine("{");
         sb.AppendLine("  \"sentiment\": \"bullish|bearish|neutral\",");
         sb.AppendLine("  \"confidence\": 0.0-1.0,");
-        sb.AppendLine("  \"currentPrice\": 1.1234, (use the most recent close price)");
-        sb.AppendLine("  \"direction\": \"Buy|Sell|None\",");
-        sb.AppendLine("  \"stopLossPrice\": 1.1000, (provide an appropriate stop loss level)");
-        sb.AppendLine("  \"takeProfitPrice\": 1.1500, (provide an appropriate take profit level)");
-        sb.AppendLine("  \"factors\": [\"Factor 1\", \"Factor 2\", ...],");
-        sb.AppendLine("  \"summary\": \"brief summary of analysis and recommendation\"");
+        sb.AppendLine("  \"currentPrice\": 0.0,");
+        sb.AppendLine("  \"direction\": \"buy|sell\",");
+        sb.AppendLine("  \"stopLossPrice\": 0.0,");
+        sb.AppendLine("  \"takeProfitPrice\": 0.0,");
+        sb.AppendLine("  \"factors\": [\"factor1\", \"factor2\", ...],");
+        sb.AppendLine("  \"summary\": \"brief summary\",");
+        sb.AppendLine("  \"sources\": [\"source1\", \"source2\", ...]");
         sb.AppendLine("}");
         
         return sb.ToString();
@@ -387,16 +400,18 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine();
         
         // Request JSON format
-        sb.AppendLine("FORMAT YOUR RESPONSE AS JSON with the following structure:");
+        sb.AppendLine("RESPONSE FORMAT:");
+        sb.AppendLine("Provide your analysis as a JSON object with the following structure:");
         sb.AppendLine("{");
-        sb.AppendLine("  \"direction\": \"Buy|Sell|None\",");
         sb.AppendLine("  \"sentiment\": \"bullish|bearish|neutral\",");
         sb.AppendLine("  \"confidence\": 0.0-1.0,");
-        sb.AppendLine($"  \"currentPrice\": {currentPrice}, (already provided for you)");
-        sb.AppendLine("  \"stopLossPrice\": 1.1000, (provide a precise stop loss level)");
-        sb.AppendLine("  \"takeProfitPrice\": 1.1500, (provide a precise take profit level)");
-        sb.AppendLine("  \"factors\": [\"Factor 1\", \"Factor 2\", ...],");
-        sb.AppendLine("  \"rationale\": \"brief explanation of trade setup and key levels\"");
+        sb.AppendLine("  \"currentPrice\": 0.0,");
+        sb.AppendLine("  \"direction\": \"buy|sell\",");
+        sb.AppendLine("  \"stopLossPrice\": 0.0,");
+        sb.AppendLine("  \"takeProfitPrice\": 0.0,");
+        sb.AppendLine("  \"factors\": [\"factor1\", \"factor2\", ...],");
+        sb.AppendLine("  \"rationale\": \"brief explanation of trade setup and key levels\",");
+        sb.AppendLine("  \"sources\": [\"source1\", \"source2\", ...]");
         sb.AppendLine("}");
         
         return sb.ToString();
@@ -468,6 +483,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         public decimal takeProfitPrice { get; set; }
         public List<string>? factors { get; set; }
         public string summary { get; set; } = string.Empty;
+        public List<string>? sources { get; set; }
     }
     
     /// <summary>

@@ -72,7 +72,12 @@ public class SentimentAnalysisResult
     public string Summary { get; set; } = string.Empty;
     
     /// <summary>
-    /// The timestamp when the sentiment analysis was performed.
+    /// List of sources cited in the analysis.
+    /// </summary>
+    public List<string> Sources { get; set; } = new List<string>();
+    
+    /// <summary>
+    /// The timestamp when the analysis was performed.
     /// </summary>
     public DateTime Timestamp { get; set; }
 }

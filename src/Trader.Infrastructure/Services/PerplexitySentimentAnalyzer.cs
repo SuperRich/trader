@@ -57,7 +57,7 @@ public class PerplexitySentimentAnalyzer : ISentimentAnalyzer
     {
         try
         {
-            var prompt = $"Analyze the current market sentiment for the {currencyPair} forex pair. Consider recent economic news, technical analysis, and market trends. Provide a summary of bullish and bearish factors, and conclude with whether the overall sentiment is bullish, bearish, or neutral. Format your response as JSON with the following structure: {{\"sentiment\": \"bullish|bearish|neutral\", \"confidence\": 0.0-1.0, \"factors\": [list of factors], \"summary\": \"brief summary\"}}";
+            var prompt = $"Analyze the current market sentiment for the {currencyPair} forex pair. Consider recent economic news, technical analysis, and market trends. Provide a summary of bullish and bearish factors, and conclude with whether the overall sentiment is bullish, bearish, or neutral. Include specific data points and cite reliable sources for your analysis. Format your response as JSON with the following structure: {{\"sentiment\": \"bullish|bearish|neutral\", \"confidence\": 0.0-1.0, \"factors\": [list of factors], \"summary\": \"brief summary\", \"sources\": [list of sources with URLs]}}";
 
             // Using current Perplexity API models from https://docs.perplexity.ai/guides/model-cards
             var requestBody = new
@@ -65,7 +65,7 @@ public class PerplexitySentimentAnalyzer : ISentimentAnalyzer
                 model = "sonar-pro", // Using current model from Perplexity docs
                 messages = new[]
                 {
-                    new { role = "system", content = "You are a financial analyst specializing in forex markets. Provide objective analysis with current data." },
+                    new { role = "system", content = "You are a financial analyst specializing in forex markets. Provide objective analysis with current data. Always verify your information with reliable sources and include citations. Be accurate with price levels and market data. Never make up information or sources. If you're uncertain about specific data points, acknowledge the limitations of your information." },
                     new { role = "user", content = prompt }
                 },
                 temperature = 0.1,
@@ -154,6 +154,7 @@ public class PerplexitySentimentAnalyzer : ISentimentAnalyzer
                 Confidence = 0.5m,
                 Factors = new List<string> { "Error fetching sentiment data" },
                 Summary = "Could not retrieve sentiment data at this time",
+                Sources = new List<string>(),
                 Timestamp = DateTime.UtcNow
             };
         }
@@ -760,6 +761,7 @@ YOU MUST:
         public decimal confidence { get; set; }
         public List<string>? factors { get; set; }
         public string summary { get; set; } = string.Empty;
+        public List<string>? sources { get; set; }
     }
     
     /// <summary>

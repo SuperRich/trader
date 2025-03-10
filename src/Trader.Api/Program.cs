@@ -24,7 +24,9 @@ public static class ConfigurationExtensions
 {
     public static IConfigurationBuilder AddInMemory(this IConfigurationBuilder builder, Dictionary<string, string> dictionary)
     {
-        return builder.AddInMemoryCollection(dictionary);
+        // Create a new collection with the correct nullability
+        var nullableCollection = dictionary.Select(kvp => new KeyValuePair<string, string?>(kvp.Key, kvp.Value));
+        return builder.AddInMemoryCollection(nullableCollection);
     }
 }
 

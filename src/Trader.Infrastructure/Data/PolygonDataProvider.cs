@@ -61,7 +61,7 @@ public class PolygonDataProvider : IForexDataProvider
         
         // For free tier limitations, use historical data endpoints instead of grouped daily
         string endpoint;
-        string from = DateTime.UtcNow.AddDays(-30).ToString("yyyy-MM-dd"); // Start from 30 days ago
+        string from = DateTime.UtcNow.AddDays(-7).ToString("yyyy-MM-dd"); // Start from 7 days ago
         string to = DateTime.UtcNow.AddDays(-1).ToString("yyyy-MM-dd");    // End at yesterday (for free tier)
         
         // Map timeframe to Polygon.io multiplier and timespan
@@ -100,12 +100,12 @@ public class PolygonDataProvider : IForexDataProvider
         if (isForex)
         {
             // Use the forex aggs endpoint for historical data
-            endpoint = $"/v2/aggs/ticker/C:{formattedSymbol}/range/{multiplier}/{timespan}/{from}/{to}?adjusted=true&apiKey={_apiKey}";
+            endpoint = $"/v2/aggs/ticker/{formattedSymbol}/range/{multiplier}/{timespan}/{from}/{to}?adjusted=true&apiKey={_apiKey}";
         }
         else // isCrypto
         {
             // Use the crypto aggs endpoint for historical data
-            endpoint = $"/v2/aggs/ticker/X:{formattedSymbol}/range/{multiplier}/{timespan}/{from}/{to}?adjusted=true&apiKey={_apiKey}";
+            endpoint = $"/v2/aggs/ticker/{formattedSymbol}/range/{multiplier}/{timespan}/{from}/{to}?adjusted=true&apiKey={_apiKey}";
         }
         
         _logger.LogInformation("Using Polygon endpoint: {Endpoint}", endpoint);
@@ -239,7 +239,7 @@ public class PolygonDataProvider : IForexDataProvider
     private class PolygonResult
     {
         public string? T { get; set; }  // Ticker
-        public int v { get; set; }      // Volume 
+        public double v { get; set; }      // Volume 
         public double o { get; set; }   // Open price
         public double c { get; set; }   // Close price
         public double h { get; set; }   // High price
