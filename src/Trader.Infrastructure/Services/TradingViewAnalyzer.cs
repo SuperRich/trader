@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Trader.Core.Models;
 using Trader.Core.Services;
+using Trader.Infrastructure.Data;
 
 namespace Trader.Infrastructure.Services;
 
@@ -111,10 +112,14 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         {
             _logger.LogInformation("Analyzing sentiment for {Symbol}", symbol);
             
+            // Check if we're using TraderMade provider to adjust candle counts
+            bool isTraderMade = _dataProvider is TraderMadeDataProvider;
+            int minuteCandles = isTraderMade ? 20 : 60; // Limit to 20 candles for TraderMade due to 2-day limit
+            
             // Fetch candle data for multiple timeframes
             var candleTasks = new[]
             {
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Minutes5, 60),
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Minutes5, minuteCandles),
                 _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 12),
                 _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 8),
                 _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Day1, 5)
@@ -243,6 +248,10 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         {
             _logger.LogInformation("Getting trading recommendations for {Count} assets", count);
             
+            // Check if we're using TraderMade provider to adjust candle counts
+            bool isTraderMade = _dataProvider is TraderMadeDataProvider;
+            int minuteCandles = isTraderMade ? 20 : 50; // Limit to 20 candles for TraderMade due to 2-day limit
+            
             // Define symbols to analyze
             var symbols = new List<string>
             {
@@ -258,7 +267,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                 try
                 {
                     // Get data for all timeframes
-                    var m5Data = await _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Minutes5, 50);
+                    var m5Data = await _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Minutes5, minuteCandles);
                     var h1Data = await _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 24);
                     var h4Data = await _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 20);
                     var d1Data = await _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Day1, 10);

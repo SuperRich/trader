@@ -310,6 +310,14 @@ curl https://localhost:7001/api/forex/candles/EURUSD/Day1/100/TraderMade
 
 Note: When using TraderMade as the provider, the Minutes15 timeframe is implemented using the 'minute' interval with a period of 15.
 
+#### TraderMade API Limitations
+
+TraderMade has the following limitations:
+- For minute-based timeframes (Minutes5, Minutes15), the API limits data to 2 working days per request
+- Valid interval values are 'minute', 'hourly', and 'daily' only
+- For minute intervals, you can specify a period (5, 15, etc.)
+- For hourly intervals, you can specify a period (4 for 4-hour timeframe)
+
 ### Chart Analysis
 
 You can also specify which provider to use for chart analysis:
@@ -374,3 +382,18 @@ If you encounter problems with the API keys:
 ### Data Provider Fallback
 
 If neither Polygon.io nor TraderMade is configured or returns an error, the system will automatically fall back to using the mock data provider. This allows you to test the API functionality without real market data.
+
+### TraderMade API Limitations
+
+If you encounter errors when using TraderMade, be aware of these limitations:
+
+1. **Minute Data Restriction**: TraderMade limits minute-based data (5min, 15min) to 2 working days per request. If you need more historical data, consider using hourly or daily timeframes.
+
+2. **Error Message**: If you see `"max 2 working days of 1 and 5 minute data allowed per request"`, it means you're trying to fetch too much minute-based data.
+
+3. **Free Tier Limitations**: The free tier has additional restrictions on the number of API calls and data points. Check your usage on the TraderMade dashboard.
+
+4. **Workaround**: For analysis that requires more historical minute data, use Polygon.io instead:
+   ```bash
+   curl https://localhost:7001/api/trading/analyze/BTCUSD/Polygon
+   ```

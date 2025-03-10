@@ -54,15 +54,24 @@ public class TraderMadeDataProvider : IForexDataProvider
         DateTime endDate = DateTime.UtcNow;
         
         // For daily timeframe, we need to go back more days to get enough candles
+        // For minute-based timeframes, TraderMade limits to 2 working days per request
         int daysToGoBack = timeframe switch
         {
             ChartTimeframe.Day1 => candleCount + 10, // Add buffer for weekends/holidays
             ChartTimeframe.Hours4 => (candleCount * 4) / 24 + 5,
             ChartTimeframe.Hours1 => (candleCount * 1) / 24 + 3,
-            _ => 30 // For minute-based timeframes, 30 days should be enough
+            ChartTimeframe.Minutes15 => 2, // TraderMade limits minute data to 2 working days
+            ChartTimeframe.Minutes5 => 2,  // TraderMade limits minute data to 2 working days
+            _ => 2 // Default to 2 days for minute-based timeframes
         };
         
         DateTime startDate = endDate.AddDays(-daysToGoBack);
+        
+        // For minute-based timeframes, log a warning about the limitation
+        if (timeframe == ChartTimeframe.Minutes5 || timeframe == ChartTimeframe.Minutes15)
+        {
+            _logger.LogWarning("TraderMade API limits minute data to 2 working days. Requested {Count} candles but date range is limited.", candleCount);
+        }
         
         string from = startDate.ToString("yyyy-MM-dd");
         string to = endDate.ToString("yyyy-MM-dd");
