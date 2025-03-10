@@ -391,9 +391,11 @@ If you encounter errors when using TraderMade, be aware of these limitations:
 
 2. **Error Message**: If you see `"max 2 working days of 1 and 5 minute data allowed per request"`, it means you're trying to fetch too much minute-based data.
 
-3. **Free Tier Limitations**: The free tier has additional restrictions on the number of API calls and data points. Check your usage on the TraderMade dashboard.
+3. **Response Format Variations**: TraderMade API may return OHLC values as either strings or numbers in different responses. Our implementation handles both formats.
 
-4. **Workaround**: For analysis that requires more historical minute data, use Polygon.io instead:
+4. **Free Tier Limitations**: The free tier has additional restrictions on the number of API calls and data points. Check your usage on the TraderMade dashboard.
+
+5. **Workaround**: For analysis that requires more historical minute data, use Polygon.io instead:
    ```bash
    curl https://localhost:7001/api/trading/analyze/BTCUSD/Polygon
    ```

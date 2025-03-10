@@ -150,10 +150,10 @@ public class TraderMadeDataProvider : IForexDataProvider
             .Select(quote => new CandleData
             {
                 Timestamp = DateTime.Parse(quote.date),
-                Open = decimal.Parse(quote.open),
-                High = decimal.Parse(quote.high),
-                Low = decimal.Parse(quote.low),
-                Close = decimal.Parse(quote.close),
+                Open = quote.GetOpenDecimal(),
+                High = quote.GetHighDecimal(),
+                Low = quote.GetLowDecimal(),
+                Close = quote.GetCloseDecimal(),
                 Volume = 0 // TraderMade doesn't provide volume data
             })
             .OrderBy(c => c.Timestamp)
@@ -196,9 +196,54 @@ public class TraderMadeDataProvider : IForexDataProvider
     private class QuoteData
     {
         public string date { get; set; } = string.Empty;
-        public string open { get; set; } = string.Empty;
-        public string high { get; set; } = string.Empty;
-        public string low { get; set; } = string.Empty;
-        public string close { get; set; } = string.Empty;
+        
+        // TraderMade API can return either string or numeric values for OHLC
+        private JsonElement _open;
+        private JsonElement _high;
+        private JsonElement _low;
+        private JsonElement _close;
+        
+        public JsonElement open 
+        { 
+            get => _open;
+            set => _open = value;
+        }
+        
+        public JsonElement high
+        {
+            get => _high;
+            set => _high = value;
+        }
+        
+        public JsonElement low
+        {
+            get => _low;
+            set => _low = value;
+        }
+        
+        public JsonElement close
+        {
+            get => _close;
+            set => _close = value;
+        }
+        
+        // Helper methods to convert JsonElement to decimal
+        public decimal GetOpenDecimal() => GetDecimalValue(_open);
+        public decimal GetHighDecimal() => GetDecimalValue(_high);
+        public decimal GetLowDecimal() => GetDecimalValue(_low);
+        public decimal GetCloseDecimal() => GetDecimalValue(_close);
+        
+        private decimal GetDecimalValue(JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.String)
+            {
+                return decimal.Parse(element.GetString() ?? "0");
+            }
+            else if (element.ValueKind == JsonValueKind.Number)
+            {
+                return element.GetDecimal();
+            }
+            return 0;
+        }
     }
 } 
