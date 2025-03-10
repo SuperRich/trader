@@ -13,6 +13,7 @@ A C# backend application for analyzing forex, crypto and stock charts at differe
 
 - View candlestick data from multiple sources:
   - Polygon.io market data API for forex and crypto (requires API key)
+  - TraderMade API for real-time forex and crypto data (requires API key)
   - Simulated data provider (fallback when no API key provided)
 - Analyze charts for multiple asset types:
   - Forex pairs (EURUSD, GBPJPY, etc.)
@@ -46,6 +47,12 @@ A C# backend application for analyzing forex, crypto and stock charts at differe
   - `timeframe`: Chart timeframe (Minutes5, Minutes15, Hours1, Hours4, Day1)
   - `count`: Number of candles to retrieve (1-1000)
 
+- `GET /api/forex/candles/{symbol}/{timeframe}/{count}/{provider}` - Get historical candle data using a specific provider
+  - `symbol`: Trading symbol (e.g., "EURUSD", "BTCUSD", "XRPUSD")
+  - `timeframe`: Chart timeframe (Minutes5, Minutes15, Hours1, Hours4, Day1)
+  - `count`: Number of candles to retrieve (1-1000)
+  - `provider`: Data provider to use (Polygon, TraderMade, Mock)
+
 ### Analysis Endpoints
 
 - `GET /api/trading/analyze/{symbol}` - Get AI analysis of a trading chart with buy/sell recommendation
@@ -68,7 +75,8 @@ A C# backend application for analyzing forex, crypto and stock charts at differe
 
 - .NET 8.0 SDK or later
 - Perplexity API key (for AI analysis)
-- Polygon.io API key (for real market data)
+- Polygon.io API key (for real market data) or
+- TraderMade API key (for real market data)
 
 ### Configuring API Keys
 
@@ -80,14 +88,17 @@ Set the environment variables before running the application:
 # For Windows PowerShell
 $env:TRADER_PERPLEXITY_API_KEY="your-perplexity-key-here"
 $env:TRADER_POLYGON_API_KEY="your-polygon-key-here"
+$env:TRADER_TRADERMADE_API_KEY="your-tradermade-key-here"
 
 # For Windows Command Prompt
 set TRADER_PERPLEXITY_API_KEY=your-perplexity-key-here
 set TRADER_POLYGON_API_KEY=your-polygon-key-here
+set TRADER_TRADERMADE_API_KEY=your-tradermade-key-here
 
 # For Linux/macOS
 export TRADER_PERPLEXITY_API_KEY=your-perplexity-key-here
 export TRADER_POLYGON_API_KEY=your-polygon-key-here
+export TRADER_TRADERMADE_API_KEY=your-tradermade-key-here
 ```
 
 #### Option 2: User Secrets (Development)
@@ -99,6 +110,7 @@ cd src/Trader.Api
 dotnet user-secrets init  # Only needed if you haven't set up user secrets yet
 dotnet user-secrets set "Perplexity:ApiKey" "your-perplexity-key-here"
 dotnet user-secrets set "Polygon:ApiKey" "your-polygon-key-here"
+dotnet user-secrets set "TraderMade:ApiKey" "your-tradermade-key-here"
 ```
 
 Verify your secrets are set correctly:
@@ -124,6 +136,13 @@ curl -X POST http://localhost:5000/api/diagnostics/set-polygon-key \
   -d '{"apiKey": "your-polygon-key-here", "saveToUserSecrets": true}'
 ```
 
+3. Set up TraderMade API key:
+```bash
+curl -X POST http://localhost:5000/api/diagnostics/set-tradermade-key \
+  -H "Content-Type: application/json" \
+  -d '{"apiKey": "your-tradermade-key-here", "saveToUserSecrets": true}'
+```
+
 ### Obtaining API Keys
 
 #### Perplexity API
@@ -136,6 +155,13 @@ curl -X POST http://localhost:5000/api/diagnostics/set-polygon-key \
 #### Polygon.io API
 
 1. Sign up for an account at [Polygon.io](https://polygon.io/)
+2. Choose a plan (they offer a free tier with limited requests)
+3. Find your API key in your dashboard
+4. The key will be a long alphanumeric string
+
+#### TraderMade API
+
+1. Sign up for an account at [TraderMade](https://tradermade.com/)
 2. Choose a plan (they offer a free tier with limited requests)
 3. Find your API key in your dashboard
 4. The key will be a long alphanumeric string
@@ -215,6 +241,32 @@ With the TradingView analysis feature, you can analyze chart patterns and get AI
 }
 ```
 
+## Using Multiple Data Providers
+
+This application supports multiple data providers for fetching market data:
+
+1. **Polygon.io** - A comprehensive market data API with support for stocks, forex, and crypto
+2. **TraderMade** - A real-time and historical data provider for forex and crypto
+3. **Mock Provider** - A simulated data provider for testing without API keys
+
+You can specify which provider to use when fetching candle data:
+
+```bash
+# Using Polygon.io
+curl http://localhost:5000/api/forex/candles/EURUSD/Hours1/100/Polygon
+
+# Using TraderMade
+curl http://localhost:5000/api/forex/candles/EURUSD/Hours1/100/TraderMade
+
+# Using Mock data
+curl http://localhost:5000/api/forex/candles/EURUSD/Hours1/100/Mock
+```
+
+If you don't specify a provider, the system will use the default provider based on available API keys:
+1. Polygon.io (if configured)
+2. TraderMade (if configured)
+3. Mock provider (fallback)
+
 ## Troubleshooting
 
 ### API Key Issues
@@ -246,6 +298,16 @@ If you encounter problems with the API keys:
        -d '{"apiKey": "your-polygon-key-here", "saveToUserSecrets": false}'
      ```
 
+4. For TraderMade API issues:
+   - Verify your subscription is active
+   - Check usage limits on your TraderMade dashboard
+   - Try the test endpoint to verify key validity:
+     ```bash
+     curl -X POST http://localhost:5000/api/diagnostics/set-tradermade-key \
+       -H "Content-Type: application/json" \
+       -d '{"apiKey": "your-tradermade-key-here", "saveToUserSecrets": false}'
+     ```
+
 ### Data Provider Fallback
 
-If Polygon.io is not configured or returns an error, the system will automatically fall back to using the mock data provider. This allows you to test the API functionality without real market data.
+If neither Polygon.io nor TraderMade is configured or returns an error, the system will automatically fall back to using the mock data provider. This allows you to test the API functionality without real market data.

@@ -19,6 +19,13 @@ public class PolygonKeyRequest
     public bool SaveToUserSecrets { get; set; } = false;
 }
 
+// Request model for TraderMade API key
+public class TraderMadeKeyRequest
+{
+    public string ApiKey { get; set; } = string.Empty;
+    public bool SaveToUserSecrets { get; set; } = false;
+}
+
 // Extension method to add in-memory configuration
 public static class ConfigurationExtensions
 {
@@ -52,16 +59,29 @@ public class Program
         // Register our services
         builder.Services.AddSingleton<PredictionService>();
         
-        // Register data providers - use PolygonDataProvider by default if configured
+        // Register all data providers
+        builder.Services.AddSingleton<ForexDataProvider>();
+        builder.Services.AddHttpClient<PolygonDataProvider>();
+        builder.Services.AddHttpClient<TraderMadeDataProvider>();
+        
+        // Register the data provider factory
+        builder.Services.AddSingleton<IForexDataProviderFactory, ForexDataProviderFactory>();
+        
+        // Register default data provider based on available API keys
         if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
         {
             builder.Services.AddHttpClient<IForexDataProvider, PolygonDataProvider>();
-            Console.WriteLine("Using Polygon.io data provider");
+            Console.WriteLine("Using Polygon.io as default data provider");
+        }
+        else if (!string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]))
+        {
+            builder.Services.AddHttpClient<IForexDataProvider, TraderMadeDataProvider>();
+            Console.WriteLine("Using TraderMade as default data provider");
         }
         else
         {
             builder.Services.AddSingleton<IForexDataProvider, ForexDataProvider>();
-            Console.WriteLine("Using mock forex data provider");
+            Console.WriteLine("Using mock forex data provider as default");
         }
         
         // Register sentiment analyzers
@@ -158,6 +178,41 @@ public class Program
             }
         })
         .WithName("GetCandles")
+        .WithOpenApi();
+        
+        // Endpoint to get historical candle data with specific provider
+        app.MapGet("/api/forex/candles/{symbol}/{timeframe}/{count}/{provider}", 
+            async (string symbol, string timeframe, int count, string provider, IForexDataProviderFactory providerFactory, ILogger<Program> logger) =>
+        {
+            try
+            {
+                if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
+                {
+                    return Results.BadRequest($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
+                }
+                
+                if (count <= 0 || count > 1000)
+                {
+                    return Results.BadRequest("Count must be between 1 and 1000");
+                }
+                
+                if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
+                {
+                    return Results.BadRequest($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
+                }
+                
+                var dataProvider = providerFactory.GetProvider(providerType);
+                var candles = await dataProvider.GetCandleDataAsync(symbol, timeframeEnum, count);
+                return Results.Ok(candles);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error fetching candle data for {Symbol} on {Timeframe} timeframe with provider {Provider}", 
+                    symbol, timeframe, provider);
+                return Results.Problem($"Error fetching data: {ex.Message}", statusCode: 500);
+            }
+        })
+        .WithName("GetCandlesWithProvider")
         .WithOpenApi();
         
         // Endpoint for TradingView chart analysis with AI recommendations
@@ -551,6 +606,167 @@ public class Program
                 catch (Exception ex)
                 {
                     logger.LogError(ex, "Error testing Polygon API key");
+                    return Results.Problem($"Error testing API key: {ex.Message}");
+                }
+            });
+        
+        // Endpoint to set TraderMade API key
+        app.MapPost("/api/diagnostics/set-tradermade-key", 
+            async (TraderMadeKeyRequest request, IConfiguration configuration, ILogger<Program> logger) =>
+            {
+                if (string.IsNullOrEmpty(request.ApiKey))
+                {
+                    return Results.BadRequest("API key cannot be empty");
+                }
+                
+                try
+                {
+                    // Test if the key is valid by making a simple API call
+                    var httpClient = new HttpClient();
+                    var testUrl = $"https://marketdata.tradermade.com/api/v1/timeseries?currency=EURUSD&api_key={request.ApiKey}&format=json&start_date={DateTime.UtcNow.AddDays(-7):yyyy-MM-dd}&end_date={DateTime.UtcNow:yyyy-MM-dd}&interval=daily";
+                    
+                    logger.LogInformation("Testing TraderMade API with key starting with {KeyPrefix}", 
+                        request.ApiKey.Length > 4 ? request.ApiKey[..4] + "..." : "too short");
+                    
+                    var response = await httpClient.GetAsync(testUrl);
+                    var responseContent = await response.Content.ReadAsStringAsync();
+                    
+                    logger.LogInformation("TraderMade API response: Status: {Status}, Content: {Content}", 
+                        response.StatusCode, responseContent);
+                        
+                    var isValid = response.IsSuccessStatusCode;
+                    var statusMessage = isValid 
+                        ? "Valid API key" 
+                        : $"Invalid API key: {response.StatusCode}. Response: {responseContent}";
+                    
+                    // Only save the key if it's valid and user wants to save
+                    if (isValid && request.SaveToUserSecrets)
+                    {
+                        try
+                        {
+                            // Save to user secrets
+                            var userSecretsId = "trader-app-secrets-id";
+                            var userSecretsPath = Path.Combine(
+                                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                                "Microsoft", "UserSecrets", userSecretsId);
+                                
+                            Directory.CreateDirectory(userSecretsPath);
+                            
+                            var secretsFilePath = Path.Combine(userSecretsPath, "secrets.json");
+                            
+                            // Read existing secrets if they exist
+                            Dictionary<string, string> secrets;
+                            if (File.Exists(secretsFilePath))
+                            {
+                                var existingJson = await File.ReadAllTextAsync(secretsFilePath);
+                                secrets = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(existingJson) 
+                                    ?? new Dictionary<string, string>();
+                            }
+                            else
+                            {
+                                secrets = new Dictionary<string, string>();
+                            }
+                            
+                            // Add/update the TraderMade API key
+                            secrets["TraderMade:ApiKey"] = request.ApiKey;
+                            
+                            await File.WriteAllTextAsync(
+                                secretsFilePath, 
+                                System.Text.Json.JsonSerializer.Serialize(secrets, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                                
+                            logger.LogInformation("Saved valid TraderMade API key to user secrets at {Path}", secretsFilePath);
+                            
+                            // Also create a .env file entry
+                            var envFilePath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+                            string envContent = "";
+                            
+                            if (File.Exists(envFilePath))
+                            {
+                                envContent = await File.ReadAllTextAsync(envFilePath);
+                            }
+                            
+                            // Update or add the TraderMade API key
+                            var envVarName = "TRADER_TRADERMADE_API_KEY";
+                            if (envContent.Contains(envVarName))
+                            {
+                                // Replace existing line
+                                var lines = envContent.Split('\n');
+                                for (int i = 0; i < lines.Length; i++)
+                                {
+                                    if (lines[i].StartsWith(envVarName))
+                                    {
+                                        lines[i] = $"{envVarName}={request.ApiKey}";
+                                        break;
+                                    }
+                                }
+                                envContent = string.Join('\n', lines);
+                            }
+                            else
+                            {
+                                // Add new line
+                                if (!string.IsNullOrEmpty(envContent) && !envContent.EndsWith('\n'))
+                                {
+                                    envContent += '\n';
+                                }
+                                envContent += $"{envVarName}={request.ApiKey}\n";
+                            }
+                            
+                            await File.WriteAllTextAsync(envFilePath, envContent);
+                            logger.LogInformation("Also saved TraderMade API key to .env file at {Path}", envFilePath);
+                            
+                            // Update appsettings.Development.json if it exists
+                            var appSettingsDevPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.Development.json");
+                            if (File.Exists(appSettingsDevPath))
+                            {
+                                try
+                                {
+                                    var json = await File.ReadAllTextAsync(appSettingsDevPath);
+                                    
+                                    // Check if TraderMade section exists
+                                    if (json.Contains("\"TraderMade\": {"))
+                                    {
+                                        var updated = System.Text.RegularExpressions.Regex.Replace(
+                                            json,
+                                            "\"ApiKey\":\\s*\"[^\"]*\"",
+                                            $"\"ApiKey\": \"{request.ApiKey}\"");
+                                            
+                                        await File.WriteAllTextAsync(appSettingsDevPath, updated);
+                                    }
+                                    else
+                                    {
+                                        // Insert TraderMade section before the closing brace
+                                        var lastBrace = json.LastIndexOf('}');
+                                        if (lastBrace > 0)
+                                        {
+                                            var updated = json.Insert(lastBrace, $",\n  \"TraderMade\": {{\n    \"ApiKey\": \"{request.ApiKey}\"\n  }}\n");
+                                            await File.WriteAllTextAsync(appSettingsDevPath, updated);
+                                        }
+                                    }
+                                    
+                                    logger.LogInformation("Updated TraderMade API key in {Path}", appSettingsDevPath);
+                                }
+                                catch (Exception ex)
+                                {
+                                    logger.LogWarning(ex, "Failed to update appsettings.Development.json");
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Failed to save TraderMade API key to some locations");
+                        }
+                    }
+                    
+                    return Results.Ok(new 
+                    { 
+                        IsValid = isValid,
+                        StatusMessage = statusMessage,
+                        SavedToUserSecrets = isValid && request.SaveToUserSecrets
+                    });
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error testing TraderMade API key");
                     return Results.Problem($"Error testing API key: {ex.Message}");
                 }
             });
