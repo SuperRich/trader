@@ -114,7 +114,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             // Fetch candle data for multiple timeframes
             var candleTasks = new[]
             {
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Minutes15, 20),
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Minutes5, 60),
                 _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 12),
                 _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 8),
                 _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Day1, 5)
@@ -124,16 +124,16 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             await Task.WhenAll(candleTasks);
             
             // Extract candle data for each timeframe
-            var candles15m = await candleTasks[0];
+            var candles5m = await candleTasks[0];
             var candles1h = await candleTasks[1];
             var candles4h = await candleTasks[2];
             var candles1d = await candleTasks[3];
             
             // Save chart data to a text file for reference
-            await SaveChartDataToFile(symbol, candles15m, candles1h, candles4h, candles1d);
+            await SaveChartDataToFile(symbol, candles5m, candles1h, candles4h, candles1d);
             
             // Generate the prompt for the sentiment analysis
-            var prompt = GenerateChartAnalysisPrompt(symbol, candles15m, candles1h, candles4h, candles1d);
+            var prompt = GenerateChartAnalysisPrompt(symbol, candles5m, candles1h, candles4h, candles1d);
             
             // Send the prompt to Perplexity AI
             var requestBody = new
@@ -362,23 +362,26 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     }
     
     /// <summary>
-    /// Generates a prompt for chart analysis across multiple timeframes.
+    /// Generates a prompt for chart analysis.
     /// </summary>
     private string GenerateChartAnalysisPrompt(
         string symbol, 
-        List<CandleData> candles15m, 
+        List<CandleData> candles5m, 
         List<CandleData> candles1h, 
         List<CandleData> candles4h,
         List<CandleData> candles1d)
     {
         var sb = new StringBuilder();
         
-        sb.AppendLine($"Analyze the following {symbol} chart data across multiple timeframes and provide a trading recommendation with stop loss and take profit levels.");
+        sb.AppendLine($"Analyze the following {symbol} chart data across multiple timeframes and provide a trading recommendation with precise entry, stop loss, and take profit levels.");
         sb.AppendLine();
         
-        // Add 15-minute timeframe data
-        sb.AppendLine("15-MINUTE TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles15m.OrderByDescending(c => c.Timestamp).Take(8));
+        // Current price (most recent close)
+        decimal currentPrice = candles5m.OrderByDescending(c => c.Timestamp).First().Close;
+        
+        // Add 5-minute timeframe data
+        sb.AppendLine("5-MINUTE TIMEFRAME DATA (newest to oldest):");
+        AppendCandleData(sb, candles5m.OrderByDescending(c => c.Timestamp).Take(8));
         sb.AppendLine();
         
         // Add 1-hour timeframe data
@@ -526,7 +529,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     /// </summary>
     private async Task SaveChartDataToFile(
         string symbol, 
-        List<CandleData> candles15m, 
+        List<CandleData> candles5m, 
         List<CandleData> candles1h, 
         List<CandleData> candles4h,
         List<CandleData> candles1d)
@@ -539,11 +542,11 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             sb.AppendLine("=======================================================");
             sb.AppendLine();
             
-            // Add 15-minute timeframe data
-            sb.AppendLine("15-MINUTE TIMEFRAME DATA (newest to oldest):");
+            // Add 5-minute timeframe data
+            sb.AppendLine("5-MINUTE TIMEFRAME DATA (newest to oldest):");
             sb.AppendLine("Timestamp (UTC) | Open | High | Low | Close | Volume");
             sb.AppendLine("--------------------------------------------------------");
-            foreach (var candle in candles15m.OrderByDescending(c => c.Timestamp))
+            foreach (var candle in candles5m.OrderByDescending(c => c.Timestamp))
             {
                 sb.AppendLine($"{candle.Timestamp:yyyy-MM-dd HH:mm:ss} | {candle.Open} | {candle.High} | {candle.Low} | {candle.Close} | {candle.Volume}");
             }

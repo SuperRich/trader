@@ -170,6 +170,25 @@ curl -X POST https://localhost:7001/api/diagnostics/set-tradermade-key \
 3. Find your API key in your dashboard
 4. The key will be a long alphanumeric string
 
+To test your TraderMade API key:
+
+```bash
+# Test your TraderMade API key
+curl -X POST https://localhost:7001/api/diagnostics/set-tradermade-key \
+  -H "Content-Type: application/json" \
+  -d '{"apiKey": "your-tradermade-key-here", "saveToUserSecrets": true}'
+```
+
+Once configured, you can use TraderMade as your data provider:
+
+```bash
+# Get EURUSD data using TraderMade
+curl https://localhost:7001/api/forex/candles/EURUSD/Hours1/100/TraderMade
+
+# Analyze BTCUSD using TraderMade data
+curl https://localhost:7001/api/trading/analyze/BTCUSD/TraderMade
+```
+
 ### Running the Application
 
 1. Clone the repository
@@ -253,6 +272,8 @@ This application supports multiple data providers for fetching market data:
 2. **TraderMade** - A real-time and historical data provider for forex and crypto
 3. **Mock Provider** - A simulated data provider for testing without API keys
 
+### Fetching Candle Data
+
 You can specify which provider to use when fetching candle data:
 
 ```bash
@@ -265,6 +286,31 @@ curl https://localhost:7001/api/forex/candles/EURUSD/Hours1/100/TraderMade
 # Using Mock data
 curl https://localhost:7001/api/forex/candles/EURUSD/Hours1/100/Mock
 ```
+
+### Different Timeframes
+
+The API supports various timeframes for candle data:
+
+```bash
+# 5-minute timeframe
+curl https://localhost:7001/api/forex/candles/EURUSD/Minutes5/100/TraderMade
+
+# 15-minute timeframe
+curl https://localhost:7001/api/forex/candles/EURUSD/Minutes15/100/TraderMade
+
+# 1-hour timeframe
+curl https://localhost:7001/api/forex/candles/EURUSD/Hours1/100/TraderMade
+
+# 4-hour timeframe
+curl https://localhost:7001/api/forex/candles/EURUSD/Hours4/100/TraderMade
+
+# Daily timeframe
+curl https://localhost:7001/api/forex/candles/EURUSD/Day1/100/TraderMade
+```
+
+Note: When using TraderMade as the provider, the Minutes15 timeframe is implemented using the 'minute' interval with a period of 15.
+
+### Chart Analysis
 
 You can also specify which provider to use for chart analysis:
 

@@ -68,22 +68,22 @@ public class TraderMadeDataProvider : IForexDataProvider
         string to = endDate.ToString("yyyy-MM-dd");
         
         // Map timeframe to TraderMade interval
-        // TraderMade formats: minute, hour, day, week, month
+        // TraderMade formats: minute, hourly, daily
         string interval;
         
         switch (timeframe)
         {
             case ChartTimeframe.Minutes5:
-                interval = "5min";
+                interval = "minute";
                 break;
             case ChartTimeframe.Minutes15:
-                interval = "15min";
+                interval = "minute";  // For 15-minute timeframe, we use 'minute' with period=15
                 break;
             case ChartTimeframe.Hours1:
                 interval = "hourly";
                 break;
             case ChartTimeframe.Hours4:
-                interval = "4h";
+                interval = "hourly";  // For 4-hour timeframe, we use 'hourly' with period=4
                 break;
             case ChartTimeframe.Day1:
                 interval = "daily";
@@ -93,8 +93,23 @@ public class TraderMadeDataProvider : IForexDataProvider
                 break;
         }
         
+        // For minute-based timeframes, we need to add a period parameter
+        string periodParam = "";
+        if (timeframe == ChartTimeframe.Minutes5)
+        {
+            periodParam = "&period=5";
+        }
+        else if (timeframe == ChartTimeframe.Minutes15)
+        {
+            periodParam = "&period=15";
+        }
+        else if (timeframe == ChartTimeframe.Hours4)
+        {
+            periodParam = "&period=4";
+        }
+        
         // Build the API endpoint URL
-        string endpoint = $"/api/v1/timeseries?currency={formattedSymbol}&api_key={_apiKey}&format=json&start_date={from}&end_date={to}&interval={interval}";
+        string endpoint = $"/api/v1/timeseries?currency={formattedSymbol}&api_key={_apiKey}&start_date={from}&end_date={to}&interval={interval}{periodParam}";
         
         _logger.LogInformation("Using TraderMade endpoint: {Endpoint}", endpoint);
         

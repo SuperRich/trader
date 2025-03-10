@@ -697,7 +697,7 @@ public class Program
                 {
                     // Test if the key is valid by making a simple API call
                     var httpClient = new HttpClient();
-                    var testUrl = $"https://marketdata.tradermade.com/api/v1/timeseries?currency=EURUSD&api_key={request.ApiKey}&format=json&start_date={DateTime.UtcNow.AddDays(-7):yyyy-MM-dd}&end_date={DateTime.UtcNow:yyyy-MM-dd}&interval=daily";
+                    var testUrl = $"https://marketdata.tradermade.com/api/v1/timeseries?currency=EURUSD&api_key={request.ApiKey}&start_date={DateTime.UtcNow.AddDays(-7):yyyy-MM-dd}&end_date={DateTime.UtcNow:yyyy-MM-dd}&interval=daily";
                     
                     logger.LogInformation("Testing TraderMade API with key starting with {KeyPrefix}", 
                         request.ApiKey.Length > 4 ? request.ApiKey[..4] + "..." : "too short");
