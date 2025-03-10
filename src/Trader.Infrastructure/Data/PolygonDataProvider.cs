@@ -59,21 +59,21 @@ public class PolygonDataProvider : IForexDataProvider
         _logger.LogInformation("Fetching Polygon.io data for {Symbol} ({FormattedSymbol}) at {Timeframe} timeframe", 
             symbol, formattedSymbol, timeframe);
         
-        // Get current date for the grouped daily endpoint
-        string today = DateTime.UtcNow.ToString("yyyy-MM-dd");
+        // Use previous day's data to avoid free tier limitations
+        string previousDay = DateTime.UtcNow.AddDays(-1).ToString("yyyy-MM-dd");
         
         // Build the endpoint URL based on whether it's forex or crypto
         string endpoint;
         
         if (isForex)
         {
-            // Use the forex endpoint for current day
-            endpoint = $"/v2/aggs/grouped/locale/global/market/fx/{today}?adjusted=true&apiKey={_apiKey}";
+            // Use the forex endpoint for previous day to work with free tier
+            endpoint = $"/v2/aggs/grouped/locale/global/market/fx/{previousDay}?adjusted=true&apiKey={_apiKey}";
         }
         else // isCrypto
         {
-            // Use the crypto endpoint for current day
-            endpoint = $"/v2/aggs/grouped/locale/global/market/crypto/{today}?adjusted=true&apiKey={_apiKey}";
+            // Use the crypto endpoint for previous day to work with free tier
+            endpoint = $"/v2/aggs/grouped/locale/global/market/crypto/{previousDay}?adjusted=true&apiKey={_apiKey}";
         }
         
         // Make the API request
