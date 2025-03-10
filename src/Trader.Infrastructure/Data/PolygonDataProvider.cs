@@ -61,8 +61,13 @@ public class PolygonDataProvider : IForexDataProvider
         
         // For free tier limitations, use historical data endpoints instead of grouped daily
         string endpoint;
-        string from = DateTime.UtcNow.AddDays(-7).ToString("yyyy-MM-dd"); // Start from 7 days ago
-        string to = DateTime.UtcNow.AddDays(-1).ToString("yyyy-MM-dd");    // End at yesterday (for free tier)
+        // Ensure we're using the current year
+        DateTime today = DateTime.UtcNow;
+        string to = today.ToString("yyyy-MM-dd");    // Use today as the end date
+        string from = today.AddDays(-7).ToString("yyyy-MM-dd"); // Start from 7 days ago
+
+        // Log the date range to verify
+        _logger.LogInformation("Requesting data from {From} to {To} for {Symbol}", from, to, symbol);
         
         // Map timeframe to Polygon.io multiplier and timespan
         // Polygon formats: 1/minute, 5/minute, 15/minute, 1/hour, 4/hour, 1/day, etc.

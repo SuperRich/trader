@@ -74,6 +74,9 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             var candles4h = await candleTasks[2];
             var candles1d = await candleTasks[3];
             
+            // Save chart data to a text file for reference
+            await SaveChartDataToFile(symbol, candles15m, candles1h, candles4h, candles1d);
+            
             // Generate the prompt for the sentiment analysis
             var prompt = GenerateChartAnalysisPrompt(symbol, candles15m, candles1h, candles4h, candles1d);
             
@@ -125,6 +128,18 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                 
                 if (sentimentData != null)
                 {
+                    // Determine trade recommendation based on direction and sentiment
+                    string tradeRecommendation = "None";
+                    if (!string.IsNullOrEmpty(sentimentData.direction))
+                    {
+                        tradeRecommendation = sentimentData.direction.Trim().ToLower() switch
+                        {
+                            "buy" => "Buy",
+                            "sell" => "Sell",
+                            _ => "None"
+                        };
+                    }
+                    
                     return new SentimentAnalysisResult
                     {
                         CurrencyPair = symbol,
@@ -133,7 +148,11 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                         Factors = sentimentData.factors != null ? sentimentData.factors : new List<string>(),
                         Summary = sentimentData.summary,
                         Sources = sentimentData.sources != null ? sentimentData.sources : new List<string>(),
-                        Timestamp = DateTime.UtcNow
+                        Timestamp = DateTime.UtcNow,
+                        CurrentPrice = sentimentData.currentPrice,
+                        TradeRecommendation = tradeRecommendation,
+                        StopLossPrice = sentimentData.stopLossPrice,
+                        TakeProfitPrice = sentimentData.takeProfitPrice
                     };
                 }
             }
@@ -147,7 +166,8 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                 Factors = new List<string> { "Error parsing sentiment data" },
                 Summary = "Could not parse sentiment data from the response",
                 Sources = new List<string>(),
-                Timestamp = DateTime.UtcNow
+                Timestamp = DateTime.UtcNow,
+                TradeRecommendation = "None"
             };
         }
         catch (Exception ex)
@@ -329,7 +349,9 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine("4. Check if the charts indicate bullish or bearish sentiment");
         sb.AppendLine("5. Be precise with price levels and never make up information");
         sb.AppendLine("6. If referencing external market conditions or news, cite reliable sources");
-        sb.AppendLine("7. Provide reasonable stop loss and take profit levels based on support/resistance");
+        sb.AppendLine("7. Provide a clear trade recommendation (Buy, Sell, or None) based on your analysis");
+        sb.AppendLine("8. If recommending a trade, provide specific stop loss and take profit levels with a minimum 1:2 risk-reward ratio");
+        sb.AppendLine("9. If no trade is recommended, explicitly set direction to 'None'");
         sb.AppendLine();
         
         // Request JSON format
@@ -442,6 +464,79 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             "bearish" => SentimentType.Bearish,
             _ => SentimentType.Neutral
         };
+    }
+    
+    /// <summary>
+    /// Saves the chart data to a text file for reference
+    /// </summary>
+    private async Task SaveChartDataToFile(
+        string symbol, 
+        List<CandleData> candles15m, 
+        List<CandleData> candles1h, 
+        List<CandleData> candles4h,
+        List<CandleData> candles1d)
+    {
+        try
+        {
+            var sb = new StringBuilder();
+            
+            sb.AppendLine($"CHART DATA FOR {symbol} - {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+            sb.AppendLine("=======================================================");
+            sb.AppendLine();
+            
+            // Add 15-minute timeframe data
+            sb.AppendLine("15-MINUTE TIMEFRAME DATA (newest to oldest):");
+            sb.AppendLine("Timestamp (UTC) | Open | High | Low | Close | Volume");
+            sb.AppendLine("--------------------------------------------------------");
+            foreach (var candle in candles15m.OrderByDescending(c => c.Timestamp))
+            {
+                sb.AppendLine($"{candle.Timestamp:yyyy-MM-dd HH:mm:ss} | {candle.Open} | {candle.High} | {candle.Low} | {candle.Close} | {candle.Volume}");
+            }
+            sb.AppendLine();
+            
+            // Add 1-hour timeframe data
+            sb.AppendLine("1-HOUR TIMEFRAME DATA (newest to oldest):");
+            sb.AppendLine("Timestamp (UTC) | Open | High | Low | Close | Volume");
+            sb.AppendLine("--------------------------------------------------------");
+            foreach (var candle in candles1h.OrderByDescending(c => c.Timestamp))
+            {
+                sb.AppendLine($"{candle.Timestamp:yyyy-MM-dd HH:mm:ss} | {candle.Open} | {candle.High} | {candle.Low} | {candle.Close} | {candle.Volume}");
+            }
+            sb.AppendLine();
+            
+            // Add 4-hour timeframe data
+            sb.AppendLine("4-HOUR TIMEFRAME DATA (newest to oldest):");
+            sb.AppendLine("Timestamp (UTC) | Open | High | Low | Close | Volume");
+            sb.AppendLine("--------------------------------------------------------");
+            foreach (var candle in candles4h.OrderByDescending(c => c.Timestamp))
+            {
+                sb.AppendLine($"{candle.Timestamp:yyyy-MM-dd HH:mm:ss} | {candle.Open} | {candle.High} | {candle.Low} | {candle.Close} | {candle.Volume}");
+            }
+            sb.AppendLine();
+            
+            // Add daily timeframe data
+            sb.AppendLine("DAILY TIMEFRAME DATA (newest to oldest):");
+            sb.AppendLine("Timestamp (UTC) | Open | High | Low | Close | Volume");
+            sb.AppendLine("--------------------------------------------------------");
+            foreach (var candle in candles1d.OrderByDescending(c => c.Timestamp))
+            {
+                sb.AppendLine($"{candle.Timestamp:yyyy-MM-dd HH:mm:ss} | {candle.Open} | {candle.High} | {candle.Low} | {candle.Close} | {candle.Volume}");
+            }
+            
+            // Create directory if it doesn't exist
+            var directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ChartData");
+            Directory.CreateDirectory(directory);
+            
+            // Save to file with timestamp
+            var filename = Path.Combine(directory, $"{symbol}_ChartData_{DateTime.UtcNow:yyyyMMdd_HHmmss}.txt");
+            await File.WriteAllTextAsync(filename, sb.ToString());
+            
+            _logger.LogInformation("Chart data saved to {Filename}", filename);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error saving chart data to file for {Symbol}", symbol);
+        }
     }
     
     #region API Response Classes

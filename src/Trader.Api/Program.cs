@@ -173,6 +173,24 @@ public class Program
                 
                 logger.LogInformation("Analyzing {Symbol} with TradingView", symbol);
                 var analysis = await analyzer.AnalyzeSentimentAsync(symbol);
+                
+                // Log trade recommendation if available
+                if (analysis.IsTradeRecommended)
+                {
+                    logger.LogInformation(
+                        "Trade recommendation for {Symbol}: {Direction} at {Price}, SL: {StopLoss}, TP: {TakeProfit}, R:R {RiskReward}",
+                        symbol, 
+                        analysis.TradeRecommendation, 
+                        analysis.CurrentPrice,
+                        analysis.StopLossPrice,
+                        analysis.TakeProfitPrice,
+                        analysis.RiskRewardRatio);
+                }
+                else
+                {
+                    logger.LogInformation("No trade recommended for {Symbol} at this time", symbol);
+                }
+                
                 return Results.Ok(analysis);
             }
             catch (Exception ex)

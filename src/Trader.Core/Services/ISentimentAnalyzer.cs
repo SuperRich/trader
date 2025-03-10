@@ -80,6 +80,41 @@ public class SentimentAnalysisResult
     /// The timestamp when the analysis was performed.
     /// </summary>
     public DateTime Timestamp { get; set; }
+    
+    /// <summary>
+    /// The current price at the time of analysis.
+    /// </summary>
+    public decimal CurrentPrice { get; set; }
+    
+    /// <summary>
+    /// The recommended trade direction (Buy, Sell, or None).
+    /// </summary>
+    public string TradeRecommendation { get; set; } = "None";
+    
+    /// <summary>
+    /// The recommended stop loss price level.
+    /// </summary>
+    public decimal StopLossPrice { get; set; }
+    
+    /// <summary>
+    /// The recommended take profit price level.
+    /// </summary>
+    public decimal TakeProfitPrice { get; set; }
+    
+    /// <summary>
+    /// The risk-to-reward ratio of the recommended trade.
+    /// </summary>
+    public decimal RiskRewardRatio => 
+        (TradeRecommendation == "Buy" && TakeProfitPrice > CurrentPrice && StopLossPrice < CurrentPrice) 
+            ? Math.Round((TakeProfitPrice - CurrentPrice) / (CurrentPrice - StopLossPrice), 2)
+            : (TradeRecommendation == "Sell" && TakeProfitPrice < CurrentPrice && StopLossPrice > CurrentPrice)
+                ? Math.Round((CurrentPrice - TakeProfitPrice) / (StopLossPrice - CurrentPrice), 2)
+                : 0;
+    
+    /// <summary>
+    /// Whether a trade is recommended based on the analysis.
+    /// </summary>
+    public bool IsTradeRecommended => TradeRecommendation != "None" && RiskRewardRatio > 0;
 }
 
 /// <summary>
