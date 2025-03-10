@@ -383,9 +383,11 @@ public class Program
                 
                 try
                 {
-                    // Test if the key is valid by making a simple API call with previous day data (free tier limitation)
+                    // Test if the key is valid by making a simple API call with historical data (free tier limitation)
                     var httpClient = new HttpClient();
-                    var testUrl = $"https://api.polygon.io/v2/aggs/grouped/locale/global/market/fx/{DateTime.UtcNow.AddDays(-1):yyyy-MM-dd}?adjusted=true&apiKey={request.ApiKey}";
+                    var from = DateTime.UtcNow.AddDays(-7).ToString("yyyy-MM-dd");
+                    var to = DateTime.UtcNow.AddDays(-1).ToString("yyyy-MM-dd");
+                    var testUrl = $"https://api.polygon.io/v2/aggs/ticker/C:EURUSD/range/1/day/{from}/{to}?adjusted=true&apiKey={request.ApiKey}";
                     
                     logger.LogInformation("Testing Polygon API with key starting with {KeyPrefix}", 
                         request.ApiKey.Length > 4 ? request.ApiKey[..4] + "..." : "too short");

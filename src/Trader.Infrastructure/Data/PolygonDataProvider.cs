@@ -59,22 +59,56 @@ public class PolygonDataProvider : IForexDataProvider
         _logger.LogInformation("Fetching Polygon.io data for {Symbol} ({FormattedSymbol}) at {Timeframe} timeframe", 
             symbol, formattedSymbol, timeframe);
         
-        // Use previous day's data to avoid free tier limitations
-        string previousDay = DateTime.UtcNow.AddDays(-1).ToString("yyyy-MM-dd");
-        
-        // Build the endpoint URL based on whether it's forex or crypto
+        // For free tier limitations, use historical data endpoints instead of grouped daily
         string endpoint;
+        string from = DateTime.UtcNow.AddDays(-30).ToString("yyyy-MM-dd"); // Start from 30 days ago
+        string to = DateTime.UtcNow.AddDays(-1).ToString("yyyy-MM-dd");    // End at yesterday (for free tier)
+        
+        // Map timeframe to Polygon.io multiplier and timespan
+        // Polygon formats: 1/minute, 5/minute, 15/minute, 1/hour, 4/hour, 1/day, etc.
+        string multiplier;
+        string timespan;
+        
+        switch (timeframe)
+        {
+            case ChartTimeframe.Minutes5:
+                multiplier = "5";
+                timespan = "minute";
+                break;
+            case ChartTimeframe.Minutes15:
+                multiplier = "15";
+                timespan = "minute";
+                break;
+            case ChartTimeframe.Hours1:
+                multiplier = "1";
+                timespan = "hour";
+                break;
+            case ChartTimeframe.Hours4:
+                multiplier = "4";
+                timespan = "hour";
+                break;
+            case ChartTimeframe.Day1:
+                multiplier = "1";
+                timespan = "day";
+                break;
+            default:
+                multiplier = "15";
+                timespan = "minute";
+                break;
+        }
         
         if (isForex)
         {
-            // Use the forex endpoint for previous day to work with free tier
-            endpoint = $"/v2/aggs/grouped/locale/global/market/fx/{previousDay}?adjusted=true&apiKey={_apiKey}";
+            // Use the forex aggs endpoint for historical data
+            endpoint = $"/v2/aggs/ticker/C:{formattedSymbol}/range/{multiplier}/{timespan}/{from}/{to}?adjusted=true&apiKey={_apiKey}";
         }
         else // isCrypto
         {
-            // Use the crypto endpoint for previous day to work with free tier
-            endpoint = $"/v2/aggs/grouped/locale/global/market/crypto/{previousDay}?adjusted=true&apiKey={_apiKey}";
+            // Use the crypto aggs endpoint for historical data
+            endpoint = $"/v2/aggs/ticker/X:{formattedSymbol}/range/{multiplier}/{timespan}/{from}/{to}?adjusted=true&apiKey={_apiKey}";
         }
+        
+        _logger.LogInformation("Using Polygon endpoint: {Endpoint}", endpoint);
         
         // Make the API request
         var response = await _httpClient.GetAsync(endpoint);
@@ -99,19 +133,9 @@ public class PolygonDataProvider : IForexDataProvider
             throw new InvalidOperationException($"No data returned from Polygon.io for symbol {symbol}");
         }
         
-        // Filter results to get only the requested symbol
-        var symbolResults = polygonResponse.results
-            .Where(r => r.T == formattedSymbol || 
-                       (isForex && r.T.Replace("C:", "") == formattedSymbol) ||
-                       (isCrypto && r.T.Replace("X:", "") == formattedSymbol))
-            .ToArray();
+        // With the aggs/ticker endpoint, we don't need to filter by symbol as we requested a specific symbol
+        var symbolResults = polygonResponse.results;
             
-        if (symbolResults.Length == 0)
-        {
-            _logger.LogWarning("Symbol {Symbol} not found in Polygon.io results", formattedSymbol);
-            throw new InvalidOperationException($"Symbol {symbol} not found in Polygon.io results");
-        }
-        
         // Convert to our CandleData format
         var candles = symbolResults
             .OrderBy(r => r.t)
@@ -128,7 +152,7 @@ public class PolygonDataProvider : IForexDataProvider
             
         _logger.LogInformation("Successfully retrieved {Count} candles for {Symbol}", candles.Count, symbol);
         
-        // If we don't have enough candles, throw an exception
+        // If we don't have enough candles, log a warning
         if (candles.Count < candleCount)
         {
             _logger.LogWarning("Only {ActualCount} candles available for {Symbol}, but {RequestedCount} were requested", 
