@@ -58,6 +58,10 @@ A C# backend application for analyzing forex, crypto and stock charts at differe
 - `GET /api/trading/analyze/{symbol}` - Get AI analysis of a trading chart with buy/sell recommendation
   - `symbol`: Trading symbol to analyze (e.g., "EURUSD", "BTCUSD")
 
+- `GET /api/trading/analyze/{symbol}/{provider}` - Get AI analysis using a specific data provider
+  - `symbol`: Trading symbol to analyze (e.g., "EURUSD", "BTCUSD")
+  - `provider`: Data provider to use (Polygon, TraderMade, Mock)
+
 - `GET /api/forex/sentiment/{symbol}` - Get market sentiment analysis for a symbol
   - `symbol`: Symbol to analyze (e.g., "EURUSD", "BTCUSD")
 
@@ -124,21 +128,21 @@ For easier setup, use our configuration endpoints:
 
 1. Set up Perplexity API key:
 ```bash
-curl -X POST http://localhost:5000/api/diagnostics/set-perplexity-key \
+curl -X POST https://localhost:7001/api/diagnostics/set-perplexity-key \
   -H "Content-Type: application/json" \
   -d '{"apiKey": "your-pplx-key-here", "saveToUserSecrets": true}'
 ```
 
 2. Set up Polygon.io API key:
 ```bash
-curl -X POST http://localhost:5000/api/diagnostics/set-polygon-key \
+curl -X POST https://localhost:7001/api/diagnostics/set-polygon-key \
   -H "Content-Type: application/json" \
   -d '{"apiKey": "your-polygon-key-here", "saveToUserSecrets": true}'
 ```
 
 3. Set up TraderMade API key:
 ```bash
-curl -X POST http://localhost:5000/api/diagnostics/set-tradermade-key \
+curl -X POST https://localhost:7001/api/diagnostics/set-tradermade-key \
   -H "Content-Type: application/json" \
   -d '{"apiKey": "your-tradermade-key-here", "saveToUserSecrets": true}'
 ```
@@ -179,7 +183,7 @@ curl -X POST http://localhost:5000/api/diagnostics/set-tradermade-key \
    cd src/Trader.Api
    dotnet run
    ```
-5. Access the Swagger UI at `https://localhost:5001/swagger`
+5. Access the Swagger UI at `https://localhost:7001/swagger`
 
 ## Using the TradingView Analysis Feature
 
@@ -191,13 +195,13 @@ With the TradingView analysis feature, you can analyze chart patterns and get AI
 
 2. Test your setup with the diagnostic endpoint:
    ```bash
-   curl http://localhost:5000/api/diagnostics/config
+   curl https://localhost:7001/api/diagnostics/config
    ```
    Confirm both API keys are configured.
 
 3. Get chart analysis for a symbol:
    ```bash
-   curl http://localhost:5000/api/trading/analyze/BTCUSD
+   curl https://localhost:7001/api/trading/analyze/BTCUSD
    ```
    This will return a detailed analysis with:
    - Current price
@@ -209,14 +213,14 @@ With the TradingView analysis feature, you can analyze chart patterns and get AI
 
 4. Get multiple trading recommendations:
    ```bash
-   curl http://localhost:5000/api/trading/recommendations?count=3
+   curl https://localhost:7001/api/trading/recommendations?count=3
    ```
    This will return the top 3 trading opportunities across both forex and crypto.
 
 5. View raw chart data:
    ```bash
    # Get the last 50 candles on the 1-hour timeframe for BTCUSD
-   curl http://localhost:5000/api/forex/candles/BTCUSD/Hours1/50
+   curl https://localhost:7001/api/forex/candles/BTCUSD/Hours1/50
    ```
 
 ### Example Trading Recommendation Response
@@ -253,13 +257,26 @@ You can specify which provider to use when fetching candle data:
 
 ```bash
 # Using Polygon.io
-curl http://localhost:5000/api/forex/candles/EURUSD/Hours1/100/Polygon
+curl https://localhost:7001/api/forex/candles/EURUSD/Hours1/100/Polygon
 
 # Using TraderMade
-curl http://localhost:5000/api/forex/candles/EURUSD/Hours1/100/TraderMade
+curl https://localhost:7001/api/forex/candles/EURUSD/Hours1/100/TraderMade
 
 # Using Mock data
-curl http://localhost:5000/api/forex/candles/EURUSD/Hours1/100/Mock
+curl https://localhost:7001/api/forex/candles/EURUSD/Hours1/100/Mock
+```
+
+You can also specify which provider to use for chart analysis:
+
+```bash
+# Using Polygon.io
+curl https://localhost:7001/api/trading/analyze/BTCUSD/Polygon
+
+# Using TraderMade
+curl https://localhost:7001/api/trading/analyze/BTCUSD/TraderMade
+
+# Using Mock data
+curl https://localhost:7001/api/trading/analyze/BTCUSD/Mock
 ```
 
 If you don't specify a provider, the system will use the default provider based on available API keys:
@@ -275,7 +292,7 @@ If you encounter problems with the API keys:
 
 1. Use the configuration check endpoint to verify your keys:
    ```bash
-   curl http://localhost:5000/api/diagnostics/config
+   curl https://localhost:7001/api/diagnostics/config
    ```
 
 2. For Perplexity API issues:
@@ -283,7 +300,7 @@ If you encounter problems with the API keys:
    - Check rate limits on your Perplexity account
    - Try the test endpoint to verify key validity:
      ```bash
-     curl -X POST http://localhost:5000/api/diagnostics/set-perplexity-key \
+     curl -X POST https://localhost:7001/api/diagnostics/set-perplexity-key \
        -H "Content-Type: application/json" \
        -d '{"apiKey": "your-pplx-key-here", "saveToUserSecrets": false}'
      ```
@@ -293,7 +310,7 @@ If you encounter problems with the API keys:
    - Check usage limits on your Polygon.io dashboard
    - Try the test endpoint to verify key validity:
      ```bash
-     curl -X POST http://localhost:5000/api/diagnostics/set-polygon-key \
+     curl -X POST https://localhost:7001/api/diagnostics/set-polygon-key \
        -H "Content-Type: application/json" \
        -d '{"apiKey": "your-polygon-key-here", "saveToUserSecrets": false}'
      ```
@@ -303,7 +320,7 @@ If you encounter problems with the API keys:
    - Check usage limits on your TraderMade dashboard
    - Try the test endpoint to verify key validity:
      ```bash
-     curl -X POST http://localhost:5000/api/diagnostics/set-tradermade-key \
+     curl -X POST https://localhost:7001/api/diagnostics/set-tradermade-key \
        -H "Content-Type: application/json" \
        -d '{"apiKey": "your-tradermade-key-here", "saveToUserSecrets": false}'
      ```

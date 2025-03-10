@@ -85,9 +85,9 @@ public class Program
         }
         
         // Register sentiment analyzers
-        if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
+        if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]) || !string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]))
         {
-            // Register TradingViewAnalyzer if Polygon.io is available
+            // Register TradingViewAnalyzer if any data provider is available
             builder.Services.AddHttpClient<ISentimentAnalyzer, TradingViewAnalyzer>();
             Console.WriteLine("Using TradingView chart analyzer");
         }
@@ -255,6 +255,80 @@ public class Program
             }
         })
         .WithName("AnalyzeChart")
+        .WithOpenApi();
+        
+        // Endpoint for TradingView chart analysis with specific data provider
+        app.MapGet("/api/trading/analyze/{symbol}/{provider}", 
+            async (string symbol, string provider, IForexDataProviderFactory providerFactory, IConfiguration configuration, ILoggerFactory loggerFactory, ILogger<Program> logger) =>
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(symbol))
+                {
+                    return Results.BadRequest("Symbol is required");
+                }
+                
+                if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
+                {
+                    return Results.BadRequest($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
+                }
+                
+                logger.LogInformation("Analyzing {Symbol} with TradingView using {Provider} data provider", symbol, provider);
+                
+                // Create a new HttpClient for the analyzer
+                var httpClient = new HttpClient
+                {
+                    BaseAddress = new Uri("https://api.perplexity.ai/")
+                };
+                httpClient.DefaultRequestHeaders.Accept.Clear();
+                httpClient.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+                
+                // Get the Perplexity API key
+                var perplexityApiKey = configuration["Perplexity:ApiKey"] ?? configuration["TRADER_PERPLEXITY_API_KEY"];
+                if (string.IsNullOrEmpty(perplexityApiKey))
+                {
+                    return Results.BadRequest("Perplexity API key is required for analysis");
+                }
+                
+                httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", perplexityApiKey);
+                
+                // Create a new analyzer with the specified provider
+                var analyzer = new TradingViewAnalyzer(
+                    providerFactory,
+                    providerType,
+                    httpClient,
+                    configuration,
+                    loggerFactory.CreateLogger<TradingViewAnalyzer>());
+                
+                var analysis = await analyzer.AnalyzeSentimentAsync(symbol);
+                
+                // Log trade recommendation if available
+                if (analysis.IsTradeRecommended)
+                {
+                    logger.LogInformation(
+                        "Trade recommendation for {Symbol} using {Provider}: {Direction} at {Price}, SL: {StopLoss}, TP: {TakeProfit}, R:R {RiskReward}",
+                        symbol,
+                        provider,
+                        analysis.TradeRecommendation, 
+                        analysis.CurrentPrice,
+                        analysis.StopLossPrice,
+                        analysis.TakeProfitPrice,
+                        analysis.RiskRewardRatio);
+                }
+                else
+                {
+                    logger.LogInformation("No trade recommended for {Symbol} using {Provider} at this time", symbol, provider);
+                }
+                
+                return Results.Ok(analysis);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error analyzing {Symbol} with {Provider}", symbol, provider);
+                return Results.Problem($"Error analyzing chart: {ex.Message}", statusCode: 500);
+            }
+        })
+        .WithName("AnalyzeChartWithProvider")
         .WithOpenApi();
         
         // Endpoint to get market sentiment analysis for a currency pair

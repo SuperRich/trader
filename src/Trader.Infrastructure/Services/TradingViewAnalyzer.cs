@@ -18,12 +18,11 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     private readonly ILogger<TradingViewAnalyzer> _logger;
 
     public TradingViewAnalyzer(
-        IForexDataProvider dataProvider,
+        IForexDataProviderFactory dataProviderFactory,
         HttpClient httpClient,
         IConfiguration configuration,
         ILogger<TradingViewAnalyzer> logger)
     {
-        _dataProvider = dataProvider ?? throw new ArgumentNullException(nameof(dataProvider));
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         
@@ -43,6 +42,62 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         _httpClient.DefaultRequestHeaders.Accept.Clear();
         _httpClient.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
         _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _perplexityApiKey);
+        
+        // Determine which data provider to use based on configuration
+        DataProviderType providerType = DataProviderType.Mock;
+        
+        if (!string.IsNullOrEmpty(configuration["Polygon:ApiKey"]))
+        {
+            providerType = DataProviderType.Polygon;
+            _logger.LogInformation("TradingViewAnalyzer using Polygon data provider");
+        }
+        else if (!string.IsNullOrEmpty(configuration["TraderMade:ApiKey"]))
+        {
+            providerType = DataProviderType.TraderMade;
+            _logger.LogInformation("TradingViewAnalyzer using TraderMade data provider");
+        }
+        else
+        {
+            _logger.LogInformation("TradingViewAnalyzer using Mock data provider");
+        }
+        
+        // Get the appropriate data provider from the factory
+        _dataProvider = dataProviderFactory.GetProvider(providerType);
+    }
+
+    /// <summary>
+    /// Constructor that allows explicitly specifying the data provider type
+    /// </summary>
+    public TradingViewAnalyzer(
+        IForexDataProviderFactory dataProviderFactory,
+        DataProviderType providerType,
+        HttpClient httpClient,
+        IConfiguration configuration,
+        ILogger<TradingViewAnalyzer> logger)
+    {
+        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        
+        // Try to get the API key from configuration (checking both regular config and environment variables)
+        var perplexityApiKey = configuration["Perplexity:ApiKey"];
+        var envApiKey = configuration["TRADER_PERPLEXITY_API_KEY"];
+        
+        if (!string.IsNullOrEmpty(perplexityApiKey))
+            _perplexityApiKey = perplexityApiKey;
+        else if (!string.IsNullOrEmpty(envApiKey))
+            _perplexityApiKey = envApiKey;
+        else
+            throw new ArgumentNullException(nameof(configuration), "Perplexity API key is required");
+            
+        // Set up HttpClient
+        _httpClient.BaseAddress = new Uri("https://api.perplexity.ai/");
+        _httpClient.DefaultRequestHeaders.Accept.Clear();
+        _httpClient.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+        _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _perplexityApiKey);
+        
+        // Get the specified data provider from the factory
+        _dataProvider = dataProviderFactory.GetProvider(providerType);
+        _logger.LogInformation("TradingViewAnalyzer using {ProviderType} data provider", providerType);
     }
 
     /// <summary>
