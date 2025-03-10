@@ -115,6 +115,52 @@ public class SentimentAnalysisResult
     /// Whether a trade is recommended based on the analysis.
     /// </summary>
     public bool IsTradeRecommended => TradeRecommendation != "None" && RiskRewardRatio > 0;
+
+    /// <summary>
+    /// Information about the current forex market session.
+    /// </summary>
+    public MarketSessionInfo? MarketSession { get; set; }
+}
+
+/// <summary>
+/// Contains information about the current forex market session.
+/// </summary>
+public class MarketSessionInfo
+{
+    /// <summary>
+    /// The name of the current market session (e.g., "Asian", "London", "New York").
+    /// </summary>
+    public string CurrentSession { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Description of the current session characteristics.
+    /// </summary>
+    public string Description { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Liquidity level from 1 (lowest) to 5 (highest).
+    /// </summary>
+    public int LiquidityLevel { get; set; }
+    
+    /// <summary>
+    /// The recommended session for executing trades for this currency pair.
+    /// </summary>
+    public string RecommendedSession { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Explanation of why the recommended session is optimal.
+    /// </summary>
+    public string RecommendationReason { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Time remaining until the next session starts (formatted as hours and minutes).
+    /// </summary>
+    public string TimeUntilNextSession { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// The next session that will become active.
+    /// </summary>
+    public string NextSession { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -201,4 +247,9 @@ public class ForexRecommendation
     /// Timestamp of when this recommendation was generated.
     /// </summary>
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    
+    /// <summary>
+    /// Information about the current forex market session.
+    /// </summary>
+    public MarketSessionInfo? MarketSession { get; set; }
 }

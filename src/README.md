@@ -229,6 +229,7 @@ With the TradingView analysis feature, you can analyze chart patterns and get AI
    - Take profit level
    - Supporting factors for the recommendation
    - Market sentiment
+   - Current market session information and liquidity
 
 4. Get multiple trading recommendations:
    ```bash
@@ -260,9 +261,72 @@ With the TradingView analysis feature, you can analyze chart patterns and get AI
     "Support confluence at current levels"
   ],
   "rationale": "BTC is showing strong upside momentum after breaking the key psychological level of $45,000. Multiple timeframes align for a bullish continuation pattern.",
-  "timestamp": "2025-03-10T12:34:56Z"
+  "timestamp": "2025-03-10T12:34:56Z",
+  "marketSession": {
+    "currentSession": "NewYork",
+    "description": "New York Session (North American markets) - High liquidity, often volatile movements",
+    "liquidityLevel": 4,
+    "recommendedSession": "NewYork",
+    "recommendationReason": "The New York session offers strong liquidity for BTCUSD with US economic data releases often creating trading opportunities. Volatility can be high during this period.",
+    "timeUntilNextSession": "5h 30m",
+    "nextSession": "Asian"
+  }
 }
 ```
+
+## Forex Market Sessions
+
+The application now provides information about forex market sessions to help you time your trades for optimal liquidity:
+
+### Market Session Information
+
+Each analysis and recommendation includes market session data:
+
+```json
+"marketSession": {
+  "currentSession": "LondonNewYorkOverlap",
+  "description": "London-New York Overlap - Highest liquidity period, often largest price movements",
+  "liquidityLevel": 5,
+  "recommendedSession": "LondonNewYorkOverlap",
+  "recommendationReason": "The London-New York overlap (13:00-16:00 UTC) provides the highest liquidity for EURUSD, with maximum market participation and often the largest price movements of the day. This is generally the optimal trading window.",
+  "timeUntilNextSession": "3h 45m",
+  "nextSession": "Asian"
+}
+```
+
+### Understanding Market Sessions
+
+The forex market operates 24 hours a day, but is divided into major sessions:
+
+1. **Asian Session** (23:00-08:00 UTC)
+   - Tokyo, Singapore, Hong Kong markets
+   - Moderate liquidity, often range-bound trading
+   - Best for JPY, AUD, NZD pairs
+
+2. **London Session** (07:00-16:00 UTC)
+   - European markets
+   - High liquidity, often trending movements
+   - Best for EUR, GBP pairs
+
+3. **New York Session** (12:00-21:00 UTC)
+   - North American markets
+   - High liquidity, often volatile movements
+   - Best for USD, CAD pairs
+
+4. **Session Overlaps**
+   - Asian-London Overlap (07:00-08:00 UTC): Increasing liquidity
+   - London-New York Overlap (12:00-16:00 UTC): Highest liquidity period
+
+### Using Session Information
+
+- **Liquidity Level**: A rating from 1-5 indicating current liquidity (5 being highest)
+- **Recommended Session**: The optimal session for trading a specific currency pair
+- **Time Until Next Session**: Helps you plan when to check back for better conditions
+
+This information can help you:
+- Time your trades for optimal liquidity
+- Understand why certain pairs move more during specific sessions
+- Plan your trading schedule around the most active periods for your preferred pairs
 
 ## Using Multiple Data Providers
 

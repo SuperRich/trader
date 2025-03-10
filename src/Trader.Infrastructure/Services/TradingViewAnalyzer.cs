@@ -17,71 +17,28 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     private readonly HttpClient _httpClient;
     private readonly string _perplexityApiKey;
     private readonly ILogger<TradingViewAnalyzer> _logger;
-
-    public TradingViewAnalyzer(
-        IForexDataProviderFactory dataProviderFactory,
-        HttpClient httpClient,
-        IConfiguration configuration,
-        ILogger<TradingViewAnalyzer> logger)
-    {
-        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        
-        // Try to get the API key from configuration (checking both regular config and environment variables)
-        var perplexityApiKey = configuration["Perplexity:ApiKey"];
-        var envApiKey = configuration["TRADER_PERPLEXITY_API_KEY"];
-        
-        if (!string.IsNullOrEmpty(perplexityApiKey))
-            _perplexityApiKey = perplexityApiKey;
-        else if (!string.IsNullOrEmpty(envApiKey))
-            _perplexityApiKey = envApiKey;
-        else
-            throw new ArgumentNullException(nameof(configuration), "Perplexity API key is required");
-            
-        // Set up HttpClient
-        _httpClient.BaseAddress = new Uri("https://api.perplexity.ai/");
-        _httpClient.DefaultRequestHeaders.Accept.Clear();
-        _httpClient.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
-        _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _perplexityApiKey);
-        
-        // Determine which data provider to use based on configuration
-        DataProviderType providerType = DataProviderType.Mock;
-        
-        if (!string.IsNullOrEmpty(configuration["Polygon:ApiKey"]))
-        {
-            providerType = DataProviderType.Polygon;
-            _logger.LogInformation("TradingViewAnalyzer using Polygon data provider");
-        }
-        else if (!string.IsNullOrEmpty(configuration["TraderMade:ApiKey"]))
-        {
-            providerType = DataProviderType.TraderMade;
-            _logger.LogInformation("TradingViewAnalyzer using TraderMade data provider");
-        }
-        else
-        {
-            _logger.LogInformation("TradingViewAnalyzer using Mock data provider");
-        }
-        
-        // Get the appropriate data provider from the factory
-        _dataProvider = dataProviderFactory.GetProvider(providerType);
-    }
+    private readonly ForexMarketSessionService _marketSessionService;
 
     /// <summary>
-    /// Constructor that allows explicitly specifying the data provider type
+    /// Constructor for TradingViewAnalyzer
     /// </summary>
     public TradingViewAnalyzer(
         IForexDataProviderFactory dataProviderFactory,
-        DataProviderType providerType,
         HttpClient httpClient,
         IConfiguration configuration,
-        ILogger<TradingViewAnalyzer> logger)
+        ILogger<TradingViewAnalyzer> logger,
+        DataProviderType? providerType = null)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _marketSessionService = new ForexMarketSessionService();
         
         // Try to get the API key from configuration (checking both regular config and environment variables)
         var perplexityApiKey = configuration["Perplexity:ApiKey"];
         var envApiKey = configuration["TRADER_PERPLEXITY_API_KEY"];
+        
+        _logger.LogInformation("Perplexity API key from config: {HasKey}", !string.IsNullOrEmpty(perplexityApiKey));
+        _logger.LogInformation("Perplexity API key from env: {HasKey}", !string.IsNullOrEmpty(envApiKey));
         
         if (!string.IsNullOrEmpty(perplexityApiKey))
             _perplexityApiKey = perplexityApiKey;
@@ -90,15 +47,51 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         else
             throw new ArgumentNullException(nameof(configuration), "Perplexity API key is required");
             
+        // Log the first few characters of the API key for debugging
+        if (!string.IsNullOrEmpty(_perplexityApiKey) && _perplexityApiKey.Length > 4)
+        {
+            _logger.LogInformation("Using Perplexity API key starting with: {KeyPrefix}...", _perplexityApiKey.Substring(0, 4));
+        }
+        else
+        {
+            _logger.LogWarning("Perplexity API key is too short or empty");
+        }
+        
         // Set up HttpClient
         _httpClient.BaseAddress = new Uri("https://api.perplexity.ai/");
         _httpClient.DefaultRequestHeaders.Accept.Clear();
         _httpClient.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
         _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _perplexityApiKey);
         
-        // Get the specified data provider from the factory
-        _dataProvider = dataProviderFactory.GetProvider(providerType);
-        _logger.LogInformation("TradingViewAnalyzer using {ProviderType} data provider", providerType);
+        // If a specific provider type is provided, use it
+        if (providerType.HasValue)
+        {
+            _dataProvider = dataProviderFactory.GetProvider(providerType.Value);
+            _logger.LogInformation("TradingViewAnalyzer using specified {ProviderType} data provider", providerType.Value);
+        }
+        else
+        {
+            // Determine which data provider to use based on configuration
+            DataProviderType defaultProviderType = DataProviderType.Mock;
+            
+            if (!string.IsNullOrEmpty(configuration["Polygon:ApiKey"]))
+            {
+                defaultProviderType = DataProviderType.Polygon;
+                _logger.LogInformation("TradingViewAnalyzer using Polygon data provider");
+            }
+            else if (!string.IsNullOrEmpty(configuration["TraderMade:ApiKey"]))
+            {
+                defaultProviderType = DataProviderType.TraderMade;
+                _logger.LogInformation("TradingViewAnalyzer using TraderMade data provider");
+            }
+            else
+            {
+                _logger.LogInformation("TradingViewAnalyzer using Mock data provider");
+            }
+            
+            // Get the appropriate data provider from the factory
+            _dataProvider = dataProviderFactory.GetProvider(defaultProviderType);
+        }
     }
 
     /// <summary>
@@ -114,30 +107,31 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             
             // Check if we're using TraderMade provider to adjust candle counts
             bool isTraderMade = _dataProvider is TraderMadeDataProvider;
-            int minuteCandles = isTraderMade ? 20 : 60; // Limit to 20 candles for TraderMade due to 2-day limit
             
-            // Fetch candle data for multiple timeframes
+            // Fetch candle data for multiple timeframes - focusing on higher timeframes
+            // We'll skip 5-minute data entirely for more stable recommendations
             var candleTasks = new[]
             {
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Minutes5, minuteCandles),
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 12),
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 8),
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Day1, 5)
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 24),  // More 1H candles
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 12),  // More 4H candles
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Day1, 10)     // More daily candles
             };
             
             // Wait for all data to be retrieved
             await Task.WhenAll(candleTasks);
             
             // Extract candle data for each timeframe
-            var candles5m = await candleTasks[0];
-            var candles1h = await candleTasks[1];
-            var candles4h = await candleTasks[2];
-            var candles1d = await candleTasks[3];
+            var candles1h = await candleTasks[0];
+            var candles4h = await candleTasks[1];
+            var candles1d = await candleTasks[2];
+            
+            // Create an empty list for 5m data (we're not using it anymore)
+            var candles5m = new List<CandleData>();
             
             // Save chart data to a text file for reference
             await SaveChartDataToFile(symbol, candles5m, candles1h, candles4h, candles1d);
             
-            // Generate the prompt for the sentiment analysis
+            // Generate the prompt for the sentiment analysis with emphasis on higher timeframes
             var prompt = GenerateChartAnalysisPrompt(symbol, candles5m, candles1h, candles4h, candles1d);
             
             // Send the prompt to Perplexity AI
@@ -146,7 +140,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                 model = "sonar-pro",
                 messages = new[]
                 {
-                    new { role = "system", content = "You are an expert trading analyst specializing in technical analysis and market sentiment. Provide concise, accurate trading advice based on chart data. Always verify your information with reliable sources and include citations when making claims about market conditions. Be precise with price levels and never make up information. If you're uncertain about specific data points, acknowledge the limitations of your information." },
+                    new { role = "system", content = "You are an expert trading analyst specializing in technical analysis and market sentiment. Focus on higher timeframes (daily, 4-hour, and 1-hour) for more reliable signals and to filter out market noise. Provide concise, accurate trading advice based on chart data. Be precise with price levels and never make up information. If you're uncertain about specific data points, acknowledge the limitations of your information. Prioritize longer-term trends over short-term fluctuations." },
                     new { role = "user", content = prompt }
                 },
                 temperature = 0.1,
@@ -200,40 +194,54 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                         };
                     }
                     
-                    return new SentimentAnalysisResult
+                    // Get market session information
+                    var sessionInfo = _marketSessionService.GetCurrentSessionInfo(symbol);
+                    
+                    // Create the sentiment analysis result
+                    var result = new SentimentAnalysisResult
                     {
                         CurrencyPair = symbol,
                         Sentiment = ParseSentiment(sentimentData.sentiment),
                         Confidence = sentimentData.confidence,
-                        Factors = sentimentData.factors != null ? sentimentData.factors : new List<string>(),
+                        Factors = sentimentData.factors ?? new List<string>(),
                         Summary = sentimentData.summary,
-                        Sources = sentimentData.sources != null ? sentimentData.sources : new List<string>(),
+                        Sources = sentimentData.sources ?? new List<string>(),
                         Timestamp = DateTime.UtcNow,
                         CurrentPrice = sentimentData.currentPrice,
                         TradeRecommendation = tradeRecommendation,
                         StopLossPrice = sentimentData.stopLossPrice,
-                        TakeProfitPrice = sentimentData.takeProfitPrice
+                        TakeProfitPrice = sentimentData.takeProfitPrice,
+                        MarketSession = new MarketSessionInfo
+                        {
+                            CurrentSession = sessionInfo.CurrentSession.ToString(),
+                            Description = sessionInfo.Description,
+                            LiquidityLevel = sessionInfo.LiquidityLevel,
+                            RecommendedSession = sessionInfo.RecommendedSession.ToString(),
+                            RecommendationReason = sessionInfo.RecommendationReason,
+                            TimeUntilNextSession = FormatTimeSpan(sessionInfo.TimeUntilNextSession),
+                            NextSession = sessionInfo.NextSession.ToString()
+                        }
                     };
+                    
+                    _logger.LogInformation(
+                        "Analysis for {Symbol}: {Sentiment} ({Confidence:P0}), Trade: {Trade}, Current Session: {Session} (Liquidity: {Liquidity}/5)",
+                        symbol,
+                        result.Sentiment,
+                        result.Confidence,
+                        result.TradeRecommendation,
+                        result.MarketSession.CurrentSession,
+                        result.MarketSession.LiquidityLevel);
+                    
+                    return result;
                 }
             }
             
-            // Fallback if we couldn't parse the JSON
-            return new SentimentAnalysisResult
-            {
-                CurrencyPair = symbol,
-                Sentiment = SentimentType.Neutral,
-                Confidence = 0.5m,
-                Factors = new List<string> { "Error parsing sentiment data" },
-                Summary = "Could not parse sentiment data from the response",
-                Sources = new List<string>(),
-                Timestamp = DateTime.UtcNow,
-                TradeRecommendation = "None"
-            };
+            throw new InvalidOperationException("Failed to parse sentiment data from response");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error analyzing sentiment for {Symbol}", symbol);
-            throw; // Don't swallow the exception - let the caller handle it
+            throw;
         }
     }
     
@@ -246,34 +254,56 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     {
         try
         {
-            _logger.LogInformation("Getting trading recommendations for {Count} assets", count);
+            _logger.LogInformation("Getting {Count} trading recommendations", count);
             
-            // Check if we're using TraderMade provider to adjust candle counts
-            bool isTraderMade = _dataProvider is TraderMadeDataProvider;
-            int minuteCandles = isTraderMade ? 20 : 50; // Limit to 20 candles for TraderMade due to 2-day limit
-            
-            // Define symbols to analyze
-            var symbols = new List<string>
+            // Check if Perplexity API key is available
+            if (string.IsNullOrEmpty(_perplexityApiKey))
             {
-                "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
-                "BTCUSD", "ETHUSD", "XRPUSD"
+                _logger.LogError("Perplexity API key is missing. Cannot generate recommendations.");
+                throw new InvalidOperationException("Perplexity API key is required for generating recommendations");
+            }
+            
+            // Define a list of common forex pairs to analyze
+            var commonPairs = new List<string>
+            {
+                "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD", "USDCHF",
+                "EURJPY", "GBPJPY", "EURGBP", "AUDJPY", "EURAUD", "EURCHF", "GBPCAD"
             };
             
-            // Generate multi-timeframe analysis for all symbols
+            // Add some crypto pairs if we're using a real data provider
+            if (!(_dataProvider is ForexDataProvider))
+            {
+                commonPairs.AddRange(new[] { "BTCUSD", "ETHUSD" });
+            }
+            
+            // Shuffle the list to get different recommendations each time
+            var random = new Random();
+            var shuffledPairs = commonPairs.OrderBy(_ => random.Next()).ToList();
+            
+            // Take more pairs to analyze to increase chances of finding good opportunities
+            var pairsToAnalyze = shuffledPairs.Take(Math.Min(count + 7, shuffledPairs.Count)).ToList();
+            
+            _logger.LogInformation("Will analyze the following pairs: {Pairs}", string.Join(", ", pairsToAnalyze));
+            
+            // Analyze each pair
             var recommendations = new List<ForexRecommendation>();
             
-            foreach (var symbol in symbols)
+            foreach (var pair in pairsToAnalyze)
             {
                 try
                 {
-                    // Get data for all timeframes
-                    var m5Data = await _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Minutes5, minuteCandles);
-                    var h1Data = await _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 24);
-                    var h4Data = await _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 20);
-                    var d1Data = await _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Day1, 10);
+                    _logger.LogInformation("Analyzing {Pair} for trading recommendation", pair);
                     
-                    // Generate the prompt for chart analysis
-                    var prompt = GenerateRecommendationPrompt(symbol, m5Data, h1Data, h4Data, d1Data);
+                    // Fetch candle data for multiple timeframes - focusing on higher timeframes
+                    var candles1h = await _dataProvider.GetCandleDataAsync(pair, ChartTimeframe.Hours1, 24);
+                    var candles4h = await _dataProvider.GetCandleDataAsync(pair, ChartTimeframe.Hours4, 12);
+                    var candles1d = await _dataProvider.GetCandleDataAsync(pair, ChartTimeframe.Day1, 10);
+                    
+                    _logger.LogInformation("Retrieved {H1Count} 1h candles, {H4Count} 4h candles, {D1Count} daily candles for {Pair}", 
+                        candles1h.Count, candles4h.Count, candles1d.Count, pair);
+                    
+                    // Generate the prompt for the recommendation with empty 5m data
+                    var prompt = GenerateRecommendationPrompt(pair, new List<CandleData>(), candles1h, candles4h, candles1d);
                     
                     // Send the prompt to Perplexity AI
                     var requestBody = new
@@ -281,7 +311,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                         model = "sonar-pro",
                         messages = new[]
                         {
-                            new { role = "system", content = "You are a professional trader with extensive experience in technical analysis. Provide accurate, actionable trading advice based on chart patterns and price action." },
+                            new { role = "system", content = "You are an expert trading analyst specializing in technical analysis and market sentiment. Focus on higher timeframes (daily, 4-hour, and 1-hour) for more reliable signals and to filter out market noise. Only recommend trades with clear setups and good risk-reward ratios. If you don't see a strong trading opportunity, clearly state that no trade is recommended at this time. Be precise with price levels and never make up information. Prioritize longer-term trends over short-term fluctuations." },
                             new { role = "user", content = prompt }
                         },
                         temperature = 0.1,
@@ -300,15 +330,27 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                     
                     request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _perplexityApiKey);
                     
+                    _logger.LogInformation("Sending request to Perplexity API for {Pair}", pair);
+                    
                     var response = await _httpClient.SendAsync(request);
-                    response.EnsureSuccessStatusCode();
+                    
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        var errorContent = await response.Content.ReadAsStringAsync();
+                        _logger.LogError("Perplexity API returned error for {Pair}: {StatusCode} - {Error}", 
+                            pair, response.StatusCode, errorContent);
+                        continue;
+                    }
                     
                     var responseString = await response.Content.ReadAsStringAsync();
+                    _logger.LogInformation("Received response from Perplexity API for {Pair} ({Length} chars)", 
+                        pair, responseString.Length);
+                    
                     var responseObject = JsonSerializer.Deserialize<PerplexityResponse>(responseString);
                     
                     if (responseObject?.choices == null || responseObject.choices.Length == 0)
                     {
-                        _logger.LogWarning("Invalid response from Perplexity API for {Symbol}", symbol);
+                        _logger.LogWarning("No choices in Perplexity API response for {Pair}", pair);
                         continue;
                     }
                     
@@ -317,47 +359,113 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                     var jsonStartIndex = responseContent.IndexOf('{');
                     var jsonEndIndex = responseContent.LastIndexOf('}');
                     
-                    if (jsonStartIndex == -1 || jsonEndIndex == -1)
+                    if (jsonStartIndex < 0 || jsonEndIndex <= jsonStartIndex)
                     {
-                        _logger.LogWarning("Could not extract JSON from response for {Symbol}", symbol);
+                        _logger.LogWarning("Could not extract JSON from Perplexity API response for {Pair}. Content: {Content}", 
+                            pair, responseContent.Length > 100 ? responseContent.Substring(0, 100) + "..." : responseContent);
                         continue;
                     }
-                        
+                    
                     var jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
-                    var recommendationData = JsonSerializer.Deserialize<RecommendationData>(jsonContent);
                     
-                    if (recommendationData == null)
+                    try
                     {
-                        _logger.LogWarning("Could not parse recommendation data for {Symbol}", symbol);
-                        continue;
+                        var recommendationData = JsonSerializer.Deserialize<RecommendationData>(jsonContent);
+                        
+                        if (recommendationData == null)
+                        {
+                            _logger.LogWarning("Failed to deserialize recommendation data for {Pair}", pair);
+                            continue;
+                        }
+                        
+                        // Skip if no clear direction or if "None" is specified
+                        if (string.IsNullOrEmpty(recommendationData.direction) || 
+                            recommendationData.direction.Equals("None", StringComparison.OrdinalIgnoreCase) ||
+                            recommendationData.direction.Equals("Neutral", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _logger.LogInformation("No clear direction in recommendation for {Pair}", pair);
+                            continue;
+                        }
+                        
+                        // Get market session information
+                        var sessionInfo = _marketSessionService.GetCurrentSessionInfo(pair);
+                        
+                        // Create the recommendation
+                        var recommendation = new ForexRecommendation
+                        {
+                            CurrencyPair = pair,
+                            Direction = recommendationData.direction,
+                            Sentiment = ParseSentiment(recommendationData.sentiment),
+                            Confidence = recommendationData.confidence,
+                            CurrentPrice = recommendationData.currentPrice,
+                            TakeProfitPrice = recommendationData.takeProfitPrice,
+                            StopLossPrice = recommendationData.stopLossPrice,
+                            Factors = recommendationData.factors ?? new List<string>(),
+                            Rationale = recommendationData.rationale,
+                            Timestamp = DateTime.UtcNow,
+                            MarketSession = new MarketSessionInfo
+                            {
+                                CurrentSession = sessionInfo.CurrentSession.ToString(),
+                                Description = sessionInfo.Description,
+                                LiquidityLevel = sessionInfo.LiquidityLevel,
+                                RecommendedSession = sessionInfo.RecommendedSession.ToString(),
+                                RecommendationReason = sessionInfo.RecommendationReason,
+                                TimeUntilNextSession = FormatTimeSpan(sessionInfo.TimeUntilNextSession),
+                                NextSession = sessionInfo.NextSession.ToString()
+                            }
+                        };
+                        
+                        // Only add if the risk-reward ratio is reasonable (at least 1.5)
+                        if (recommendation.RiskRewardRatio >= 1.5m)
+                        {
+                            recommendations.Add(recommendation);
+                            
+                            _logger.LogInformation(
+                                "Added recommendation for {Symbol}: {Direction} at {Price}, R:R {RiskReward}, Session: {Session} (Liquidity: {Liquidity}/5)",
+                                recommendation.CurrencyPair,
+                                recommendation.Direction,
+                                recommendation.CurrentPrice,
+                                recommendation.RiskRewardRatio,
+                                recommendation.MarketSession.CurrentSession,
+                                recommendation.MarketSession.LiquidityLevel);
+                        }
+                        else
+                        {
+                            _logger.LogInformation(
+                                "Skipping recommendation with low R:R for {Symbol}: {Direction} at {Price}, R:R {RiskReward}",
+                                recommendation.CurrencyPair,
+                                recommendation.Direction,
+                                recommendation.CurrentPrice,
+                                recommendation.RiskRewardRatio);
+                        }
                     }
-                    
-                    // Add to recommendations list
-                    recommendations.Add(new ForexRecommendation
+                    catch (JsonException ex)
                     {
-                        CurrencyPair = symbol,
-                        Direction = recommendationData.direction,
-                        Sentiment = ParseSentiment(recommendationData.sentiment),
-                        Confidence = recommendationData.confidence,
-                        CurrentPrice = recommendationData.currentPrice,
-                        TakeProfitPrice = recommendationData.takeProfitPrice,
-                        StopLossPrice = recommendationData.stopLossPrice,
-                        Factors = recommendationData.factors ?? new List<string>(),
-                        Rationale = recommendationData.rationale,
-                        Timestamp = DateTime.UtcNow
-                    });
+                        _logger.LogError(ex, "Error deserializing recommendation data for {Pair}. JSON: {Json}", 
+                            pair, jsonContent.Length > 100 ? jsonContent.Substring(0, 100) + "..." : jsonContent);
+                    }
                 }
                 catch (Exception ex)
                 {
-                    // Log but continue with other symbols
-                    _logger.LogError(ex, "Error getting recommendation for {Symbol}", symbol);
+                    _logger.LogWarning(ex, "Error analyzing {Pair} for recommendations", pair);
+                    // Continue with other pairs
                 }
                 
-                // Add a small delay to avoid API rate limits
-                await Task.Delay(200);
+                // If we have enough recommendations, stop
+                if (recommendations.Count >= count)
+                {
+                    break;
+                }
             }
             
-            // Sort recommendations by confidence and return the top N
+            // If no recommendations were found, return an empty list
+            if (recommendations.Count == 0)
+            {
+                _logger.LogInformation("No trading opportunities with good risk-reward ratios found at this time.");
+                return new List<ForexRecommendation>();
+            }
+            
+            // Sort by confidence and take the requested number
             return recommendations
                 .OrderByDescending(r => r.Confidence)
                 .Take(count)
@@ -366,7 +474,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting trading recommendations");
-            throw; // Don't swallow the exception - let the caller handle it
+            throw;
         }
     }
     
@@ -382,59 +490,75 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     {
         var sb = new StringBuilder();
         
-        sb.AppendLine($"Analyze the following {symbol} chart data across multiple timeframes and provide a trading recommendation with precise entry, stop loss, and take profit levels.");
+        sb.AppendLine($"Analyze the following chart data for {symbol} and provide a detailed technical analysis with trading recommendation.");
         sb.AppendLine();
         
-        // Current price (most recent close)
-        decimal currentPrice = candles5m.OrderByDescending(c => c.Timestamp).First().Close;
-        
-        // Add 5-minute timeframe data
-        sb.AppendLine("5-MINUTE TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles5m.OrderByDescending(c => c.Timestamp).Take(8));
+        sb.AppendLine("Focus on the higher timeframes (daily, 4-hour, and 1-hour) for more reliable signals.");
+        sb.AppendLine("Ignore short-term noise and prioritize longer-term trends.");
         sb.AppendLine();
         
-        // Add 1-hour timeframe data
-        sb.AppendLine("1-HOUR TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles1h.OrderByDescending(c => c.Timestamp).Take(6));
+        // Add daily candles (highest priority)
+        sb.AppendLine("## Daily Timeframe (Most Important)");
+        if (candles1d.Count > 0)
+        {
+            sb.AppendLine($"Last {candles1d.Count} daily candles:");
+            AppendCandleData(sb, candles1d);
+        }
+        else
+        {
+            sb.AppendLine("No daily data available.");
+        }
         sb.AppendLine();
         
-        // Add 4-hour timeframe data
-        sb.AppendLine("4-HOUR TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles4h.OrderByDescending(c => c.Timestamp).Take(5));
+        // Add 4-hour candles (second priority)
+        sb.AppendLine("## 4-Hour Timeframe (Important)");
+        if (candles4h.Count > 0)
+        {
+            sb.AppendLine($"Last {candles4h.Count} 4-hour candles:");
+            AppendCandleData(sb, candles4h);
+        }
+        else
+        {
+            sb.AppendLine("No 4-hour data available.");
+        }
         sb.AppendLine();
         
-        // Add daily timeframe data
-        sb.AppendLine("DAILY TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles1d.OrderByDescending(c => c.Timestamp).Take(3));
+        // Add 1-hour candles (third priority)
+        sb.AppendLine("## 1-Hour Timeframe (Supplementary)");
+        if (candles1h.Count > 0)
+        {
+            sb.AppendLine($"Last {candles1h.Count} 1-hour candles:");
+            AppendCandleData(sb, candles1h);
+        }
+        else
+        {
+            sb.AppendLine("No 1-hour data available.");
+        }
         sb.AppendLine();
         
-        // Add instructions for analysis
-        sb.AppendLine("ANALYSIS INSTRUCTIONS:");
-        sb.AppendLine("1. Identify key support and resistance levels visible on these charts");
-        sb.AppendLine("2. Analyze price action trends and market structure on each timeframe");
-        sb.AppendLine("3. Determine if any significant chart patterns are present");
-        sb.AppendLine("4. Check if the charts indicate bullish or bearish sentiment");
-        sb.AppendLine("5. Be precise with price levels and never make up information");
-        sb.AppendLine("6. If referencing external market conditions or news, cite reliable sources");
-        sb.AppendLine("7. Provide a clear trade recommendation (Buy, Sell, or None) based on your analysis");
-        sb.AppendLine("8. If recommending a trade, provide specific stop loss and take profit levels with a minimum 1:2 risk-reward ratio");
-        sb.AppendLine("9. If no trade is recommended, explicitly set direction to 'None'");
+        // We're skipping 5-minute data entirely
+        
+        sb.AppendLine("Based on this data, provide a comprehensive analysis including:");
+        sb.AppendLine("1. Current market structure and trend direction on each timeframe");
+        sb.AppendLine("2. Key support and resistance levels");
+        sb.AppendLine("3. Important technical indicators and patterns");
+        sb.AppendLine("4. Trading recommendation with entry, stop loss, and take profit levels");
         sb.AppendLine();
         
-        // Request JSON format
-        sb.AppendLine("RESPONSE FORMAT:");
-        sb.AppendLine("Provide your analysis as a JSON object with the following structure:");
+        sb.AppendLine("Provide your analysis in the following JSON format:");
         sb.AppendLine("{");
-        sb.AppendLine("  \"sentiment\": \"bullish|bearish|neutral\",");
+        sb.AppendLine("  \"sentiment\": \"Bullish\", \"Bearish\", or \"Neutral\",");
         sb.AppendLine("  \"confidence\": 0.0-1.0,");
-        sb.AppendLine("  \"currentPrice\": 0.0,");
-        sb.AppendLine("  \"direction\": \"buy|sell\",");
-        sb.AppendLine("  \"stopLossPrice\": 0.0,");
-        sb.AppendLine("  \"takeProfitPrice\": 0.0,");
+        sb.AppendLine("  \"currentPrice\": current price as decimal,");
+        sb.AppendLine("  \"direction\": \"Buy\", \"Sell\", or \"None\",");
+        sb.AppendLine("  \"stopLossPrice\": stop loss price as decimal,");
+        sb.AppendLine("  \"takeProfitPrice\": target price as decimal,");
         sb.AppendLine("  \"factors\": [\"factor1\", \"factor2\", ...],");
-        sb.AppendLine("  \"summary\": \"brief summary\",");
-        sb.AppendLine("  \"sources\": [\"source1\", \"source2\", ...]");
+        sb.AppendLine("  \"summary\": \"Brief summary of the analysis\",");
+        sb.AppendLine("  \"sources\": []");
         sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("Only recommend a trade if there is a clear setup with a good risk-reward ratio (at least 1.5:1). If there's no clear trade opportunity, set direction to \"None\".");
         
         return sb.ToString();
     }
@@ -451,57 +575,67 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     {
         var sb = new StringBuilder();
         
-        sb.AppendLine($"Analyze the following {symbol} chart data across multiple timeframes and provide a trading recommendation with precise entry, stop loss, and take profit levels.");
+        sb.AppendLine($"Analyze the following chart data for {symbol} and provide a trading recommendation.");
         sb.AppendLine();
         
-        // Current price (most recent close)
-        decimal currentPrice = candles5m.OrderByDescending(c => c.Timestamp).First().Close;
-        
-        // Add 5-minute timeframe data
-        sb.AppendLine("5-MINUTE TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles5m.OrderByDescending(c => c.Timestamp).Take(10));
+        sb.AppendLine("Focus on the higher timeframes (daily, 4-hour, and 1-hour) for more reliable signals.");
+        sb.AppendLine("Ignore short-term noise and prioritize longer-term trends.");
         sb.AppendLine();
         
-        // Add 1-hour timeframe data
-        sb.AppendLine("1-HOUR TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles1h.OrderByDescending(c => c.Timestamp).Take(8));
+        // Add daily candles (highest priority)
+        sb.AppendLine("## Daily Timeframe (Most Important)");
+        if (candles1d.Count > 0)
+        {
+            sb.AppendLine($"Last {candles1d.Count} daily candles:");
+            AppendCandleData(sb, candles1d);
+        }
+        else
+        {
+            sb.AppendLine("No daily data available.");
+        }
         sb.AppendLine();
         
-        // Add 4-hour timeframe data
-        sb.AppendLine("4-HOUR TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles4h.OrderByDescending(c => c.Timestamp).Take(5));
+        // Add 4-hour candles (second priority)
+        sb.AppendLine("## 4-Hour Timeframe (Important)");
+        if (candles4h.Count > 0)
+        {
+            sb.AppendLine($"Last {candles4h.Count} 4-hour candles:");
+            AppendCandleData(sb, candles4h);
+        }
+        else
+        {
+            sb.AppendLine("No 4-hour data available.");
+        }
         sb.AppendLine();
         
-        // Add daily timeframe data
-        sb.AppendLine("DAILY TIMEFRAME DATA (newest to oldest):");
-        AppendCandleData(sb, candles1d.OrderByDescending(c => c.Timestamp).Take(3));
+        // Add 1-hour candles (third priority)
+        sb.AppendLine("## 1-Hour Timeframe (Supplementary)");
+        if (candles1h.Count > 0)
+        {
+            sb.AppendLine($"Last {candles1h.Count} 1-hour candles:");
+            AppendCandleData(sb, candles1h);
+        }
+        else
+        {
+            sb.AppendLine("No 1-hour data available.");
+        }
         sb.AppendLine();
         
-        // Add instructions for analysis
-        sb.AppendLine("TRADING RECOMMENDATION INSTRUCTIONS:");
-        sb.AppendLine("1. Determine the current trend direction on each timeframe");
-        sb.AppendLine("2. Identify key support and resistance levels");
-        sb.AppendLine("3. Look for trade entry signals (e.g., reversal patterns, breakouts, continuation patterns)");
-        sb.AppendLine("4. If you identify a valid trade setup, recommend either Buy or Sell with an entry price at the current price");
-        sb.AppendLine("5. Based on the chart structure, provide appropriate stop loss and take profit levels");
-        sb.AppendLine("6. Ensure the risk-reward ratio is at least 1:1.5");
-        sb.AppendLine("7. If no clear trade setup exists, recommend 'None' for the direction");
-        sb.AppendLine();
+        // We're skipping 5-minute data entirely
         
-        // Request JSON format
-        sb.AppendLine("RESPONSE FORMAT:");
-        sb.AppendLine("Provide your analysis as a JSON object with the following structure:");
+        sb.AppendLine("Based on this data, provide a trading recommendation in the following JSON format:");
         sb.AppendLine("{");
-        sb.AppendLine("  \"sentiment\": \"bullish|bearish|neutral\",");
+        sb.AppendLine("  \"direction\": \"Buy\", \"Sell\", or \"None\",");
+        sb.AppendLine("  \"sentiment\": \"Bullish\", \"Bearish\", or \"Neutral\",");
         sb.AppendLine("  \"confidence\": 0.0-1.0,");
-        sb.AppendLine("  \"currentPrice\": 0.0,");
-        sb.AppendLine("  \"direction\": \"buy|sell\",");
-        sb.AppendLine("  \"stopLossPrice\": 0.0,");
-        sb.AppendLine("  \"takeProfitPrice\": 0.0,");
+        sb.AppendLine("  \"currentPrice\": current price as decimal,");
+        sb.AppendLine("  \"takeProfitPrice\": target price as decimal,");
+        sb.AppendLine("  \"stopLossPrice\": stop loss price as decimal,");
         sb.AppendLine("  \"factors\": [\"factor1\", \"factor2\", ...],");
-        sb.AppendLine("  \"rationale\": \"brief explanation of trade setup and key levels\",");
-        sb.AppendLine("  \"sources\": [\"source1\", \"source2\", ...]");
+        sb.AppendLine("  \"rationale\": \"Brief explanation of the recommendation\"");
         sb.AppendLine("}");
+        sb.AppendLine();
+        sb.AppendLine("Only recommend a trade if there is a clear setup with a good risk-reward ratio (at least 1.5:1). If there's no clear trade opportunity, set direction to \"None\".");
         
         return sb.ToString();
     }
@@ -511,12 +645,17 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     /// </summary>
     private void AppendCandleData(StringBuilder sb, IEnumerable<CandleData> candles)
     {
-        sb.AppendLine("Timestamp | Open | High | Low | Close | Volume");
-        sb.AppendLine("----------|------|------|-----|-------|-------");
+        // Sort candles by timestamp (oldest to newest) for better trend analysis
+        var orderedCandles = candles.OrderBy(c => c.Timestamp).ToList();
         
-        foreach (var candle in candles)
+        // Create a header row
+        sb.AppendLine("| Date | Open | High | Low | Close |");
+        sb.AppendLine("|------|------|------|-----|-------|");
+        
+        // Add each candle as a row
+        foreach (var candle in orderedCandles)
         {
-            sb.AppendLine($"{candle.Timestamp:yyyy-MM-dd HH:mm} | {candle.Open} | {candle.High} | {candle.Low} | {candle.Close} | {candle.Volume}");
+            sb.AppendLine($"| {candle.Timestamp:yyyy-MM-dd HH:mm} | {candle.Open:F5} | {candle.High:F5} | {candle.Low:F5} | {candle.Close:F5} |");
         }
     }
     
@@ -604,6 +743,27 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         {
             _logger.LogError(ex, "Error saving chart data to file for {Symbol}", symbol);
         }
+    }
+    
+    /// <summary>
+    /// Formats a TimeSpan into a human-readable string (e.g., "2h 15m").
+    /// </summary>
+    private string FormatTimeSpan(TimeSpan timeSpan)
+    {
+        if (timeSpan.TotalMinutes < 1)
+        {
+            return "less than a minute";
+        }
+        
+        var hours = (int)timeSpan.TotalHours;
+        var minutes = timeSpan.Minutes;
+        
+        if (hours > 0)
+        {
+            return $"{hours}h {minutes}m";
+        }
+        
+        return $"{minutes}m";
     }
     
     #region API Response Classes

@@ -67,6 +67,9 @@ public class Program
         // Register the data provider factory
         builder.Services.AddSingleton<IForexDataProviderFactory, ForexDataProviderFactory>();
         
+        // Register the forex market session service
+        builder.Services.AddSingleton<ForexMarketSessionService>();
+        
         // Register default data provider based on available API keys
         if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
         {
@@ -295,10 +298,10 @@ public class Program
                 // Create a new analyzer with the specified provider
                 var analyzer = new TradingViewAnalyzer(
                     providerFactory,
-                    providerType,
                     httpClient,
                     configuration,
-                    loggerFactory.CreateLogger<TradingViewAnalyzer>());
+                    loggerFactory.CreateLogger<TradingViewAnalyzer>(),
+                    providerType);
                 
                 var analysis = await analyzer.AnalyzeSentimentAsync(symbol);
                 
@@ -365,6 +368,16 @@ public class Program
                 
                 logger.LogInformation("Getting {Count} trading recommendations", pairCount);
                 var recommendations = await analyzer.GetTradingRecommendationsAsync(pairCount);
+                
+                if (recommendations.Count == 0)
+                {
+                    logger.LogInformation("No trading opportunities found that meet the criteria");
+                    return Results.Ok(new { 
+                        message = "No trading opportunities with favorable risk-reward ratios found at this time. Market conditions may not be optimal for new positions.",
+                        recommendations = new List<object>()
+                    });
+                }
+                
                 return Results.Ok(recommendations);
             }
             catch (Exception ex)
@@ -845,44 +858,41 @@ public class Program
                 }
             });
         
-        // Diagnostic endpoint to check API configuration
+        // Diagnostic endpoint to check configuration
         app.MapGet("/api/diagnostics/config", 
-            (IConfiguration configuration, IWebHostEnvironment env, ILogger<Program> logger) =>
-        {
-            var perplexityApiKey = configuration["Perplexity:ApiKey"] ?? configuration["TRADER_PERPLEXITY_API_KEY"];
-            var polygonApiKey = configuration["Polygon:ApiKey"] ?? configuration["TRADER_POLYGON_API_KEY"];
-                
-            var userSecretsPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "Microsoft", "UserSecrets", "trader-app-secrets-id", "secrets.json");
-                
-            var configStatus = new
+            (IConfiguration configuration, ILogger<Program> logger) =>
             {
-                PerplexityApiKey = new
+                var perplexityApiKey = configuration["Perplexity:ApiKey"] ?? configuration["TRADER_PERPLEXITY_API_KEY"];
+                var polygonApiKey = configuration["Polygon:ApiKey"] ?? configuration["TRADER_POLYGON_API_KEY"];
+                var tradermadeApiKey = configuration["TraderMade:ApiKey"] ?? configuration["TRADER_TRADERMADE_API_KEY"];
+                
+                var hasPerplexity = !string.IsNullOrEmpty(perplexityApiKey);
+                var hasPolygon = !string.IsNullOrEmpty(polygonApiKey);
+                var hasTraderMade = !string.IsNullOrEmpty(tradermadeApiKey);
+                
+                logger.LogInformation("Configuration check: Perplexity API key: {HasKey}, Polygon API key: {HasPolygon}, TraderMade API key: {HasTraderMade}",
+                    hasPerplexity, hasPolygon, hasTraderMade);
+                
+                var defaultProvider = hasPolygon ? "Polygon" : hasTraderMade ? "TraderMade" : "Mock";
+                
+                return Results.Ok(new
                 {
-                    IsConfigured = !string.IsNullOrEmpty(perplexityApiKey),
-                    Length = perplexityApiKey?.Length ?? 0,
-                    Prefix = perplexityApiKey?.Length > 4 ? perplexityApiKey[..4] + "..." : "N/A"
-                },
-                PolygonApiKey = new
-                {
-                    IsConfigured = !string.IsNullOrEmpty(polygonApiKey),
-                    Length = polygonApiKey?.Length ?? 0,
-                    Prefix = polygonApiKey?.Length > 4 ? polygonApiKey[..4] + "..." : "N/A"
-                },
-                Environment = new
-                {
-                    Name = env.EnvironmentName,
-                    UserSecretsPath = userSecretsPath,
-                    UserSecretsExist = File.Exists(userSecretsPath)
-                }
-            };
-            
-            logger.LogInformation("API configuration check: {@ConfigStatus}", configStatus);
-            
-            return Results.Ok(configStatus);
-        })
-        .WithName("CheckApiConfig")
+                    HasPerplexityApiKey = hasPerplexity,
+                    HasPolygonApiKey = hasPolygon,
+                    HasTraderMadeApiKey = hasTraderMade,
+                    DefaultDataProvider = defaultProvider,
+                    PerplexityKeyPrefix = hasPerplexity && !string.IsNullOrEmpty(perplexityApiKey) && perplexityApiKey.Length > 4 
+                        ? perplexityApiKey.Substring(0, 4) + "..." 
+                        : null,
+                    PolygonKeyPrefix = hasPolygon && !string.IsNullOrEmpty(polygonApiKey) && polygonApiKey.Length > 4 
+                        ? polygonApiKey.Substring(0, 4) + "..." 
+                        : null,
+                    TraderMadeKeyPrefix = hasTraderMade && !string.IsNullOrEmpty(tradermadeApiKey) && tradermadeApiKey.Length > 4 
+                        ? tradermadeApiKey.Substring(0, 4) + "..." 
+                        : null
+                });
+            })
+        .WithName("CheckConfiguration")
         .WithOpenApi();
 
         app.Run();
