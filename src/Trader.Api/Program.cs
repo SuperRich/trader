@@ -12,6 +12,13 @@ public class KeyRequest
     public bool SaveToUserSecrets { get; set; } = false;
 }
 
+// Request model for Polygon API key
+public class PolygonKeyRequest
+{
+    public string ApiKey { get; set; } = string.Empty;
+    public bool SaveToUserSecrets { get; set; } = false;
+}
+
 // Extension method to add in-memory configuration
 public static class ConfigurationExtensions
 {
@@ -42,10 +49,32 @@ public class Program
         
         // Register our services
         builder.Services.AddSingleton<PredictionService>();
-        builder.Services.AddSingleton<IForexDataProvider, ForexDataProvider>();
         
-        // Register Perplexity sentiment analyzer
-        builder.Services.AddHttpClient<ISentimentAnalyzer, PerplexitySentimentAnalyzer>();
+        // Register data providers - use PolygonDataProvider by default if configured
+        if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
+        {
+            builder.Services.AddHttpClient<IForexDataProvider, PolygonDataProvider>();
+            Console.WriteLine("Using Polygon.io data provider");
+        }
+        else
+        {
+            builder.Services.AddSingleton<IForexDataProvider, ForexDataProvider>();
+            Console.WriteLine("Using mock forex data provider");
+        }
+        
+        // Register sentiment analyzers
+        if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
+        {
+            // Register TradingViewAnalyzer if Polygon.io is available
+            builder.Services.AddHttpClient<ISentimentAnalyzer, TradingViewAnalyzer>();
+            Console.WriteLine("Using TradingView chart analyzer");
+        }
+        else
+        {
+            // Fallback to Perplexity analyzer
+            builder.Services.AddHttpClient<ISentimentAnalyzer, PerplexitySentimentAnalyzer>();
+            Console.WriteLine("Using Perplexity sentiment analyzer");
+        }
         
         // Enable CORS
         builder.Services.AddCors(options =>
@@ -102,51 +131,100 @@ public class Program
         .WithOpenApi();
 
         // Endpoint to get historical candle data
-        app.MapGet("/api/forex/candles/{currencyPair}/{timeframe}/{count}", 
-            async (string currencyPair, string timeframe, int count, IForexDataProvider dataProvider) =>
+        app.MapGet("/api/forex/candles/{symbol}/{timeframe}/{count}", 
+            async (string symbol, string timeframe, int count, IForexDataProvider dataProvider, ILogger<Program> logger) =>
         {
-            if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
+            try
             {
-                return Results.BadRequest($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
+                if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
+                {
+                    return Results.BadRequest($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
+                }
+                
+                if (count <= 0 || count > 1000)
+                {
+                    return Results.BadRequest("Count must be between 1 and 1000");
+                }
+                
+                var candles = await dataProvider.GetCandleDataAsync(symbol, timeframeEnum, count);
+                return Results.Ok(candles);
             }
-            
-            if (count <= 0 || count > 1000)
+            catch (Exception ex)
             {
-                return Results.BadRequest("Count must be between 1 and 1000");
+                logger.LogError(ex, "Error fetching candle data for {Symbol} on {Timeframe} timeframe", symbol, timeframe);
+                return Results.Problem($"Error fetching data: {ex.Message}", statusCode: 500);
             }
-            
-            var candles = await dataProvider.GetCandleDataAsync(currencyPair, timeframeEnum, count);
-            return Results.Ok(candles);
         })
-        .WithName("GetForexCandles")
+        .WithName("GetCandles")
+        .WithOpenApi();
+        
+        // Endpoint for TradingView chart analysis with AI recommendations
+        app.MapGet("/api/trading/analyze/{symbol}", 
+            async (string symbol, ISentimentAnalyzer analyzer, ILogger<Program> logger) =>
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(symbol))
+                {
+                    return Results.BadRequest("Symbol is required");
+                }
+                
+                logger.LogInformation("Analyzing {Symbol} with TradingView", symbol);
+                var analysis = await analyzer.AnalyzeSentimentAsync(symbol);
+                return Results.Ok(analysis);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error analyzing {Symbol}", symbol);
+                return Results.Problem($"Error analyzing chart: {ex.Message}", statusCode: 500);
+            }
+        })
+        .WithName("AnalyzeChart")
         .WithOpenApi();
         
         // Endpoint to get market sentiment analysis for a currency pair
         app.MapGet("/api/forex/sentiment/{currencyPair}", 
-            async (string currencyPair, ISentimentAnalyzer sentimentAnalyzer) =>
+            async (string currencyPair, ISentimentAnalyzer sentimentAnalyzer, ILogger<Program> logger) =>
         {
-            if (string.IsNullOrWhiteSpace(currencyPair))
+            try
             {
-                return Results.BadRequest("Currency pair is required");
+                if (string.IsNullOrWhiteSpace(currencyPair))
+                {
+                    return Results.BadRequest("Currency pair is required");
+                }
+                
+                var sentiment = await sentimentAnalyzer.AnalyzeSentimentAsync(currencyPair);
+                return Results.Ok(sentiment);
             }
-            
-            var sentiment = await sentimentAnalyzer.AnalyzeSentimentAsync(currencyPair);
-            return Results.Ok(sentiment);
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error analyzing sentiment for {CurrencyPair}", currencyPair);
+                return Results.Problem($"Error analyzing sentiment: {ex.Message}", statusCode: 500);
+            }
         })
         .WithName("GetForexSentiment")
         .WithOpenApi();
         
-        // Endpoint to get recommended forex trading opportunities
-        app.MapGet("/api/forex/recommendations", 
-            async (int? count, ISentimentAnalyzer sentimentAnalyzer) =>
+        // Endpoint to get recommended trading opportunities based on AI analysis
+        app.MapGet("/api/trading/recommendations", 
+            async (int? count, ISentimentAnalyzer analyzer, ILogger<Program> logger) =>
         {
-            // Limit to reasonable values, default to 3
-            var pairCount = count.HasValue && count.Value > 0 && count.Value <= 5 ? count.Value : 3;
-            
-            var recommendations = await sentimentAnalyzer.GetTradingRecommendationsAsync(pairCount);
-            return Results.Ok(recommendations);
+            try
+            {
+                // Limit to reasonable values, default to 3
+                var pairCount = count.HasValue && count.Value > 0 && count.Value <= 5 ? count.Value : 3;
+                
+                logger.LogInformation("Getting {Count} trading recommendations", pairCount);
+                var recommendations = await analyzer.GetTradingRecommendationsAsync(pairCount);
+                return Results.Ok(recommendations);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error getting trading recommendations");
+                return Results.Problem($"Error getting recommendations: {ex.Message}", statusCode: 500);
+            }
         })
-        .WithName("GetForexRecommendations")
+        .WithName("GetTradingRecommendations")
         .WithOpenApi();
         
         // Diagnostic endpoint to set Perplexity API key directly
@@ -294,14 +372,173 @@ public class Program
                 }
             });
         
+        // Endpoint to set Polygon.io API key
+        app.MapPost("/api/diagnostics/set-polygon-key", 
+            async (PolygonKeyRequest request, IConfiguration configuration, ILogger<Program> logger) =>
+            {
+                if (string.IsNullOrEmpty(request.ApiKey))
+                {
+                    return Results.BadRequest("API key cannot be empty");
+                }
+                
+                try
+                {
+                    // Test if the key is valid by making a simple API call
+                    var httpClient = new HttpClient();
+                    var testUrl = $"https://api.polygon.io/v2/aggs/grouped/locale/global/market/fx/{DateTime.UtcNow:yyyy-MM-dd}?adjusted=true&apiKey={request.ApiKey}";
+                    
+                    logger.LogInformation("Testing Polygon API with key starting with {KeyPrefix}", 
+                        request.ApiKey.Length > 4 ? request.ApiKey[..4] + "..." : "too short");
+                    
+                    var response = await httpClient.GetAsync(testUrl);
+                    var responseContent = await response.Content.ReadAsStringAsync();
+                    
+                    logger.LogInformation("Polygon API response: Status: {Status}, Content: {Content}", 
+                        response.StatusCode, responseContent);
+                        
+                    var isValid = response.IsSuccessStatusCode;
+                    var statusMessage = isValid 
+                        ? "Valid API key" 
+                        : $"Invalid API key: {response.StatusCode}. Response: {responseContent}";
+                    
+                    // Only save the key if it's valid and user wants to save
+                    if (isValid && request.SaveToUserSecrets)
+                    {
+                        try
+                        {
+                            // Save to user secrets
+                            var userSecretsId = "trader-app-secrets-id";
+                            var userSecretsPath = Path.Combine(
+                                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                                "Microsoft", "UserSecrets", userSecretsId);
+                                
+                            Directory.CreateDirectory(userSecretsPath);
+                            
+                            var secretsFilePath = Path.Combine(userSecretsPath, "secrets.json");
+                            
+                            // Read existing secrets if they exist
+                            Dictionary<string, string> secrets;
+                            if (File.Exists(secretsFilePath))
+                            {
+                                var existingJson = await File.ReadAllTextAsync(secretsFilePath);
+                                secrets = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(existingJson) 
+                                    ?? new Dictionary<string, string>();
+                            }
+                            else
+                            {
+                                secrets = new Dictionary<string, string>();
+                            }
+                            
+                            // Add/update the Polygon API key
+                            secrets["Polygon:ApiKey"] = request.ApiKey;
+                            
+                            await File.WriteAllTextAsync(
+                                secretsFilePath, 
+                                System.Text.Json.JsonSerializer.Serialize(secrets, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                                
+                            logger.LogInformation("Saved valid Polygon API key to user secrets at {Path}", secretsFilePath);
+                            
+                            // Also create a .env file entry
+                            var envFilePath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+                            string envContent = "";
+                            
+                            if (File.Exists(envFilePath))
+                            {
+                                envContent = await File.ReadAllTextAsync(envFilePath);
+                            }
+                            
+                            // Update or add the Polygon API key
+                            var envVarName = "TRADER_POLYGON_API_KEY";
+                            if (envContent.Contains(envVarName))
+                            {
+                                // Replace existing line
+                                var lines = envContent.Split('\n');
+                                for (int i = 0; i < lines.Length; i++)
+                                {
+                                    if (lines[i].StartsWith(envVarName))
+                                    {
+                                        lines[i] = $"{envVarName}={request.ApiKey}";
+                                        break;
+                                    }
+                                }
+                                envContent = string.Join('\n', lines);
+                            }
+                            else
+                            {
+                                // Add new line
+                                if (!string.IsNullOrEmpty(envContent) && !envContent.EndsWith('\n'))
+                                {
+                                    envContent += '\n';
+                                }
+                                envContent += $"{envVarName}={request.ApiKey}\n";
+                            }
+                            
+                            await File.WriteAllTextAsync(envFilePath, envContent);
+                            logger.LogInformation("Also saved Polygon API key to .env file at {Path}", envFilePath);
+                            
+                            // Update appsettings.Development.json if it exists
+                            var appSettingsDevPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.Development.json");
+                            if (File.Exists(appSettingsDevPath))
+                            {
+                                try
+                                {
+                                    var json = await File.ReadAllTextAsync(appSettingsDevPath);
+                                    
+                                    // Check if Polygon section exists
+                                    if (json.Contains("\"Polygon\": {"))
+                                    {
+                                        var updated = System.Text.RegularExpressions.Regex.Replace(
+                                            json,
+                                            "\"ApiKey\":\\s*\"[^\"]*\"",
+                                            $"\"ApiKey\": \"{request.ApiKey}\"");
+                                            
+                                        await File.WriteAllTextAsync(appSettingsDevPath, updated);
+                                    }
+                                    else
+                                    {
+                                        // Insert Polygon section before the closing brace
+                                        var lastBrace = json.LastIndexOf('}');
+                                        if (lastBrace > 0)
+                                        {
+                                            var updated = json.Insert(lastBrace, $",\n  \"Polygon\": {{\n    \"ApiKey\": \"{request.ApiKey}\"\n  }}\n");
+                                            await File.WriteAllTextAsync(appSettingsDevPath, updated);
+                                        }
+                                    }
+                                    
+                                    logger.LogInformation("Updated Polygon API key in {Path}", appSettingsDevPath);
+                                }
+                                catch (Exception ex)
+                                {
+                                    logger.LogWarning(ex, "Failed to update appsettings.Development.json");
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Failed to save Polygon API key to some locations");
+                        }
+                    }
+                    
+                    return Results.Ok(new 
+                    { 
+                        IsValid = isValid,
+                        StatusMessage = statusMessage,
+                        SavedToUserSecrets = isValid && request.SaveToUserSecrets
+                    });
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error testing Polygon API key");
+                    return Results.Problem($"Error testing API key: {ex.Message}");
+                }
+            });
         
-        // Diagnostic endpoint to check Perplexity API configuration
-        app.MapGet("/api/diagnostics/perplexity-config", 
+        // Diagnostic endpoint to check API configuration
+        app.MapGet("/api/diagnostics/config", 
             (IConfiguration configuration, IWebHostEnvironment env, ILogger<Program> logger) =>
         {
-            var apiKeyFromSection = configuration["Perplexity:ApiKey"];
-            var apiKeyFromEnvVar = configuration["TRADER_PERPLEXITY_API_KEY"];
-            var apiKey = apiKeyFromSection ?? apiKeyFromEnvVar;
+            var perplexityApiKey = configuration["Perplexity:ApiKey"] ?? configuration["TRADER_PERPLEXITY_API_KEY"];
+            var polygonApiKey = configuration["Polygon:ApiKey"] ?? configuration["TRADER_POLYGON_API_KEY"];
                 
             var userSecretsPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -309,37 +546,31 @@ public class Program
                 
             var configStatus = new
             {
-                ApiKeyConfigured = !string.IsNullOrEmpty(apiKey),
-                ApiKeyLength = apiKey?.Length ?? 0,
-                ApiKeyPrefix = apiKey?.Length > 4 ? apiKey[..4] + "..." : "N/A",
-                EnvironmentVariablePresent = !string.IsNullOrEmpty(apiKeyFromEnvVar),
-                AppSettingsPresent = !string.IsNullOrEmpty(apiKeyFromSection),
-                EnvironmentName = env.EnvironmentName,
-                UserSecretsIdInProject = "trader-app-secrets-id",
-                UserSecretsFileExists = File.Exists(userSecretsPath),
-                UserSecretsPath = userSecretsPath,
-                AvailableConfigKeys = configuration.AsEnumerable()
-                    .Where(kvp => !kvp.Key.Contains("ConnectionString") && 
-                                  !kvp.Key.Contains("Password") && 
-                                  !kvp.Key.Contains("Secret"))
-                    .Select(kvp => kvp.Key)
-                    .ToList()
+                PerplexityApiKey = new
+                {
+                    IsConfigured = !string.IsNullOrEmpty(perplexityApiKey),
+                    Length = perplexityApiKey?.Length ?? 0,
+                    Prefix = perplexityApiKey?.Length > 4 ? perplexityApiKey[..4] + "..." : "N/A"
+                },
+                PolygonApiKey = new
+                {
+                    IsConfigured = !string.IsNullOrEmpty(polygonApiKey),
+                    Length = polygonApiKey?.Length ?? 0,
+                    Prefix = polygonApiKey?.Length > 4 ? polygonApiKey[..4] + "..." : "N/A"
+                },
+                Environment = new
+                {
+                    Name = env.EnvironmentName,
+                    UserSecretsPath = userSecretsPath,
+                    UserSecretsExist = File.Exists(userSecretsPath)
+                }
             };
             
-            logger.LogInformation("Perplexity API configuration check: {@ConfigStatus}", 
-                new { 
-                    configStatus.ApiKeyConfigured,
-                    configStatus.ApiKeyLength,
-                    configStatus.ApiKeyPrefix,
-                    configStatus.EnvironmentVariablePresent,
-                    configStatus.AppSettingsPresent,
-                    configStatus.EnvironmentName,
-                    configStatus.UserSecretsFileExists
-                });
+            logger.LogInformation("API configuration check: {@ConfigStatus}", configStatus);
             
             return Results.Ok(configStatus);
         })
-        .WithName("CheckPerplexityConfig")
+        .WithName("CheckApiConfig")
         .WithOpenApi();
 
         app.Run();
