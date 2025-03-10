@@ -34,6 +34,58 @@ public class TraderMadeDataProvider : IForexDataProvider
     }
 
     /// <summary>
+    /// Gets live rate data for a specific symbol
+    /// </summary>
+    /// <param name="symbol">The symbol to get data for (e.g., "EURUSD", "BTCUSD")</param>
+    /// <returns>The current price data</returns>
+    public async Task<LiveRateData> GetLiveRateAsync(string symbol)
+    {
+        string formattedSymbol = FormatSymbolForTraderMade(symbol);
+        
+        _logger.LogInformation("Fetching TraderMade live rate for {Symbol}", symbol);
+        
+        // Build the API endpoint URL for live rates
+        string endpoint = $"/api/v1/live?currency={formattedSymbol}&api_key={_apiKey}";
+        
+        _logger.LogInformation("Using TraderMade live endpoint: {Endpoint}", endpoint);
+        
+        // Make the API request
+        var response = await _httpClient.GetAsync(endpoint);
+        
+        // Check if the request was successful
+        if (!response.IsSuccessStatusCode)
+        {
+            string errorContent = await response.Content.ReadAsStringAsync();
+            _logger.LogError("TraderMade live API request failed with status {StatusCode}: {ErrorMessage}", 
+                response.StatusCode, errorContent);
+            
+            throw new HttpRequestException($"TraderMade live API request failed: {response.StatusCode} - {errorContent}");
+        }
+        
+        // Parse the response
+        var responseContent = await response.Content.ReadAsStringAsync();
+        var liveResponse = JsonSerializer.Deserialize<LiveRateResponse>(responseContent);
+        
+        if (liveResponse?.quotes == null || liveResponse.quotes.Length == 0)
+        {
+            _logger.LogWarning("No live rate results returned from TraderMade for {Symbol}", symbol);
+            throw new InvalidOperationException($"No live rate data returned from TraderMade for symbol {symbol}");
+        }
+        
+        // Extract the quote for the requested symbol
+        var quote = liveResponse.quotes[0];
+        
+        return new LiveRateData
+        {
+            Symbol = symbol,
+            Bid = quote.bid,
+            Ask = quote.ask,
+            Mid = quote.mid,
+            Timestamp = DateTimeOffset.FromUnixTimeSeconds(liveResponse.timestamp).DateTime
+        };
+    }
+
+    /// <summary>
     /// Gets candle data for the specified symbol from TraderMade API.
     /// </summary>
     /// <param name="symbol">The symbol to get data for (e.g., "EURUSD", "BTCUSD")</param>
@@ -168,6 +220,44 @@ public class TraderMadeDataProvider : IForexDataProvider
                 candles.Count, symbol, candleCount);
         }
         
+        // Try to get the current live price to update the most recent candle
+        try
+        {
+            var liveRate = await GetLiveRateAsync(symbol);
+            
+            // If we have candles and the live rate is more recent, update the last candle's close price
+            if (candles.Count > 0)
+            {
+                _logger.LogInformation("Updating last candle with live rate: {LiveRate}", liveRate.Mid);
+                
+                // Get the most recent candle
+                var lastCandle = candles.Last();
+                
+                // Only update if the live rate is more recent
+                if (liveRate.Timestamp > lastCandle.Timestamp)
+                {
+                    // Create a new candle with the updated close price
+                    var updatedCandle = new CandleData
+                    {
+                        Timestamp = lastCandle.Timestamp,
+                        Open = lastCandle.Open,
+                        High = Math.Max(lastCandle.High, liveRate.Mid), // Update high if live rate is higher
+                        Low = Math.Min(lastCandle.Low, liveRate.Mid),   // Update low if live rate is lower
+                        Close = liveRate.Mid,                           // Use live rate as close
+                        Volume = lastCandle.Volume
+                    };
+                    
+                    // Replace the last candle with the updated one
+                    candles[candles.Count - 1] = updatedCandle;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // Log but continue with the historical data
+            _logger.LogWarning(ex, "Failed to get live rate for {Symbol}. Using historical data only.", symbol);
+        }
+        
         // Return the requested number of candles (or less if not enough data)
         return candles.TakeLast(Math.Min(candles.Count, candleCount)).ToList();
     }
@@ -182,7 +272,7 @@ public class TraderMadeDataProvider : IForexDataProvider
     }
     
     /// <summary>
-    /// Response structure from the TraderMade API.
+    /// Response structure from the TraderMade API for timeseries data.
     /// </summary>
     private class TraderMadeResponse
     {
@@ -245,5 +335,39 @@ public class TraderMadeDataProvider : IForexDataProvider
             }
             return 0;
         }
+    }
+    
+    /// <summary>
+    /// Response structure from the TraderMade API for live rates.
+    /// </summary>
+    private class LiveRateResponse
+    {
+        public string? endpoint { get; set; }
+        public long timestamp { get; set; }
+        public LiveQuoteData[]? quotes { get; set; }
+    }
+    
+    /// <summary>
+    /// Live quote data structure from the TraderMade API.
+    /// </summary>
+    private class LiveQuoteData
+    {
+        public string? base_currency { get; set; }
+        public string? quote_currency { get; set; }
+        public decimal bid { get; set; }
+        public decimal mid { get; set; }
+        public decimal ask { get; set; }
+    }
+    
+    /// <summary>
+    /// Structure to hold live rate data.
+    /// </summary>
+    public class LiveRateData
+    {
+        public string Symbol { get; set; } = string.Empty;
+        public decimal Bid { get; set; }
+        public decimal Ask { get; set; }
+        public decimal Mid { get; set; }
+        public DateTime Timestamp { get; set; }
     }
 } 

@@ -318,6 +318,14 @@ TraderMade has the following limitations:
 - For minute intervals, you can specify a period (5, 15, etc.)
 - For hourly intervals, you can specify a period (4 for 4-hour timeframe)
 
+#### TraderMade Live Rates
+
+Our implementation uses TraderMade's Live Rates API to enhance the accuracy of current prices:
+- Historical data is fetched from the timeseries endpoint
+- Current prices are updated using the live rates endpoint
+- This provides more accurate and up-to-date closing prices for the most recent candle
+- The system automatically combines historical and live data for the best accuracy
+
 ### Chart Analysis
 
 You can also specify which provider to use for chart analysis:
@@ -393,9 +401,11 @@ If you encounter errors when using TraderMade, be aware of these limitations:
 
 3. **Response Format Variations**: TraderMade API may return OHLC values as either strings or numbers in different responses. Our implementation handles both formats.
 
-4. **Free Tier Limitations**: The free tier has additional restrictions on the number of API calls and data points. Check your usage on the TraderMade dashboard.
+4. **Live Rates Enhancement**: The system automatically fetches live rates to update the most recent candle's close price for better accuracy. If you see different prices compared to historical data, this is expected and provides more accurate current prices.
 
-5. **Workaround**: For analysis that requires more historical minute data, use Polygon.io instead:
+5. **Free Tier Limitations**: The free tier has additional restrictions on the number of API calls and data points. Check your usage on the TraderMade dashboard.
+
+6. **Workaround**: For analysis that requires more historical minute data, use Polygon.io instead:
    ```bash
    curl https://localhost:7001/api/trading/analyze/BTCUSD/Polygon
    ```
