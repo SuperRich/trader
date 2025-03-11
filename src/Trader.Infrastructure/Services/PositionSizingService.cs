@@ -156,6 +156,31 @@ namespace Trader.Infrastructure.Services
                 decimal riskAmount = targetProfit;
                 decimal riskPercentage = Math.Round((riskAmount / accountBalance) * 100, 2);
                 
+                // Calculate price levels based on a 2:1 risk-reward ratio
+                decimal baseStopLoss = isCrypto ? 0.02m : pipValue * 30; // 2% for crypto, 30 pips for forex
+                decimal stopLossDistance = Math.Max(baseStopLoss, priceMovementRequired / 2); // Scale SL with target
+                
+                // Calculate SL and TP prices based on direction
+                decimal stopLossPrice, takeProfitPrice, invalidationPrice;
+                
+                if (isCrypto)
+                {
+                    // For crypto, round to 2 decimal places
+                    stopLossPrice = Math.Round(currentPrice * (1 - stopLossDistance), 2);
+                    takeProfitPrice = Math.Round(currentPrice * (1 + (stopLossDistance * 2)), 2); // 2:1 ratio
+                    invalidationPrice = Math.Round(stopLossPrice * (1 - 0.01m), 2); // 1% below SL
+                }
+                else
+                {
+                    // For forex, round to 5 decimal places
+                    stopLossPrice = Math.Round(currentPrice * (1 - stopLossDistance), 5);
+                    takeProfitPrice = Math.Round(currentPrice * (1 + (stopLossDistance * 2)), 5); // 2:1 ratio
+                    invalidationPrice = Math.Round(stopLossPrice * (1 - pipValue), 5); // 1 pip below SL
+                }
+                
+                // Calculate actual risk-reward ratio
+                decimal riskRewardRatio = Math.Round((takeProfitPrice - currentPrice) / (currentPrice - stopLossPrice), 2);
+                
                 result.ProfitTargets[targetProfit] = new PositionSizingTarget
                 {
                     TargetProfit = targetProfit,
@@ -164,7 +189,11 @@ namespace Trader.Infrastructure.Services
                     PriceMovementRequired = Math.Round(priceMovementRequired, isCrypto ? 2 : 5),
                     PriceMovementPercent = Math.Round(priceMovementPercent * 100, 2), // Convert to percentage
                     RiskAmount = riskAmount,
-                    RiskPercentage = riskPercentage
+                    RiskPercentage = riskPercentage,
+                    StopLossPrice = stopLossPrice,
+                    TakeProfitPrice = takeProfitPrice,
+                    InvalidationPrice = invalidationPrice,
+                    RiskRewardRatio = riskRewardRatio
                 };
             }
             

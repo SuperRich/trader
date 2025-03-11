@@ -28,5 +28,11 @@ namespace Trader.Core.Models
         public decimal PriceMovementPercent { get; set; } // Price movement as percentage
         public decimal RiskAmount { get; set; }       // Amount at risk in account currency
         public decimal RiskPercentage { get; set; }   // Risk as percentage of account
+        
+        // Price levels for trade management
+        public decimal StopLossPrice { get; set; }    // Stop loss price for this target
+        public decimal TakeProfitPrice { get; set; }  // Take profit price for this target
+        public decimal InvalidationPrice { get; set; } // Price at which the trade setup becomes invalid
+        public decimal RiskRewardRatio { get; set; }  // Risk to reward ratio for this target
     }
 } 
