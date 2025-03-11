@@ -183,6 +183,16 @@ public class SentimentAnalysisResult
     /// The date and time until which this recommendation is considered valid.
     /// </summary>
     public DateTime ValidUntil { get; set; } = DateTime.UtcNow.AddDays(1);
+    
+    /// <summary>
+    /// Indicates whether it's still safe to enter the trade at the current price, even if the best entry price is different.
+    /// </summary>
+    public bool IsSafeToEnterAtCurrentPrice { get; set; } = false;
+    
+    /// <summary>
+    /// Explains why it's safe or unsafe to enter at the current price, providing specific reasoning.
+    /// </summary>
+    public string CurrentEntryReason { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -350,4 +360,14 @@ public class ForexRecommendation
     /// The date and time until which this recommendation is considered valid.
     /// </summary>
     public DateTime ValidUntil { get; set; } = DateTime.UtcNow.AddDays(1);
+    
+    /// <summary>
+    /// Indicates whether it's still safe to enter the trade at the current price, even if the best entry price is different.
+    /// </summary>
+    public bool IsSafeToEnterAtCurrentPrice { get; set; } = false;
+    
+    /// <summary>
+    /// Explains why it's safe or unsafe to enter at the current price, providing specific reasoning.
+    /// </summary>
+    public string CurrentEntryReason { get; set; } = string.Empty;
 }

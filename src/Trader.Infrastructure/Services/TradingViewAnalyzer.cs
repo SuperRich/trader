@@ -215,6 +215,8 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                         OrderType = ParseOrderType(sentimentData.orderType, sentimentData.direction, sentimentData.currentPrice, sentimentData.bestEntryPrice),
                         TimeToBestEntry = !string.IsNullOrEmpty(sentimentData.timeToBestEntry) ? sentimentData.timeToBestEntry : "Unknown",
                         ValidUntil = ParseValidityPeriod(sentimentData.validityPeriod),
+                        IsSafeToEnterAtCurrentPrice = sentimentData.isSafeToEnterAtCurrentPrice,
+                        CurrentEntryReason = sentimentData.currentEntryReason,
                         MarketSession = new MarketSessionInfo
                         {
                             CurrentSession = sessionInfo.CurrentSession.ToString(),
@@ -425,6 +427,8 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                             OrderType = ParseOrderType(recommendationData.orderType, recommendationData.direction, recommendationData.currentPrice, recommendationData.bestEntryPrice),
                             TimeToBestEntry = !string.IsNullOrEmpty(recommendationData.timeToBestEntry) ? recommendationData.timeToBestEntry : "Unknown",
                             ValidUntil = ParseValidityPeriod(recommendationData.validityPeriod),
+                            IsSafeToEnterAtCurrentPrice = recommendationData.isSafeToEnterAtCurrentPrice,
+                            CurrentEntryReason = recommendationData.currentEntryReason,
                             Factors = recommendationData.factors ?? new List<string>(),
                             Rationale = recommendationData.rationale,
                             Timestamp = DateTime.UtcNow,
@@ -600,6 +604,8 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine("  \"orderType\": \"Market\", \"Limit\", or \"Stop\",");
         sb.AppendLine("  \"timeToBestEntry\": \"estimated time until best entry price is reached (e.g., '2-3 hours', '1-2 days')\",");
         sb.AppendLine("  \"validityPeriod\": \"how long this recommendation is valid for (e.g., '24 hours', '3 days')\",");
+        sb.AppendLine("  \"isSafeToEnterAtCurrentPrice\": true or false (whether it's still acceptable to enter at current price),");
+        sb.AppendLine("  \"currentEntryReason\": \"detailed explanation of why it's safe or unsafe to enter at current price\",");
         sb.AppendLine("  \"factors\": [\"factor1\", \"factor2\", ...],");
         sb.AppendLine("  \"summary\": \"Brief summary of the analysis\",");
         sb.AppendLine("  \"sources\": []");
@@ -617,6 +623,19 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine("  - Use \"Stop\" if the best entry price is BELOW the current price (waiting for breakdown confirmation)");
         sb.AppendLine();
         sb.AppendLine("Note: The system will automatically correct the order type based on the relationship between current price and best entry price if needed.");
+        sb.AppendLine();
+        sb.AppendLine("For the isSafeToEnterAtCurrentPrice field:");
+        sb.AppendLine("- Set to true if entering at the current price is still acceptable, even if not optimal");
+        sb.AppendLine("- Set to false if entering at the current price would significantly reduce the risk-reward ratio or increase risk");
+        sb.AppendLine("- Consider factors like volatility, proximity to key levels, and overall market conditions");
+        sb.AppendLine("- This helps traders decide whether to wait for the best entry or execute immediately");
+        sb.AppendLine();
+        sb.AppendLine("For the currentEntryReason field:");
+        sb.AppendLine("- Provide a detailed explanation (1-3 sentences) of why it's safe or unsafe to enter at the current price");
+        sb.AppendLine("- If safe, explain why the current price is still a good entry despite not being optimal");
+        sb.AppendLine("- If unsafe, explain specifically what risks or disadvantages exist at the current price");
+        sb.AppendLine("- Include specific price levels, risk-reward calculations, or technical factors in your explanation");
+        sb.AppendLine("- This helps traders understand exactly why they should wait or can proceed immediately");
         sb.AppendLine();
         sb.AppendLine("For the timeToBestEntry field:");
         sb.AppendLine("- Provide an estimate of how long it might take for the price to reach the best entry level");
@@ -703,6 +722,8 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine("  \"orderType\": \"Market\", \"Limit\", or \"Stop\",");
         sb.AppendLine("  \"timeToBestEntry\": \"estimated time until best entry price is reached (e.g., '2-3 hours', '1-2 days')\",");
         sb.AppendLine("  \"validityPeriod\": \"how long this recommendation is valid for (e.g., '24 hours', '3 days')\",");
+        sb.AppendLine("  \"isSafeToEnterAtCurrentPrice\": true or false (whether it's still acceptable to enter at current price),");
+        sb.AppendLine("  \"currentEntryReason\": \"detailed explanation of why it's safe or unsafe to enter at current price\",");
         sb.AppendLine("  \"factors\": [\"factor1\", \"factor2\", ...],");
         sb.AppendLine("  \"rationale\": \"Brief explanation of the recommendation\"");
         sb.AppendLine("}");
@@ -721,6 +742,18 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine("  - Use \"Stop\" if the best entry price is BELOW the current price (waiting for breakdown confirmation)");
         sb.AppendLine();
         sb.AppendLine("Note: The system will automatically correct the order type based on the relationship between current price and best entry price if needed.");
+        sb.AppendLine();
+        sb.AppendLine("For the isSafeToEnterAtCurrentPrice field:");
+        sb.AppendLine("- Set to true if entering at the current price is still acceptable, even if not optimal");
+        sb.AppendLine("- Set to false if entering at the current price would significantly reduce the risk-reward ratio or increase risk");
+        sb.AppendLine("- Consider factors like volatility, proximity to key levels, and overall market conditions");
+        sb.AppendLine();
+        sb.AppendLine("For the currentEntryReason field:");
+        sb.AppendLine("- Provide a detailed explanation (1-3 sentences) of why it's safe or unsafe to enter at the current price");
+        sb.AppendLine("- If safe, explain why the current price is still a good entry despite not being optimal");
+        sb.AppendLine("- If unsafe, explain specifically what risks or disadvantages exist at the current price");
+        sb.AppendLine("- Include specific price levels, risk-reward calculations, or technical factors in your explanation");
+        sb.AppendLine("- This helps traders understand exactly why they should wait or can proceed immediately");
         sb.AppendLine();
         sb.AppendLine("For the timeToBestEntry field:");
         sb.AppendLine("- Provide an estimate of how long it might take for the price to reach the best entry level");
@@ -1036,6 +1069,8 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         public string orderType { get; set; } = "Market";
         public string timeToBestEntry { get; set; } = string.Empty;
         public string validityPeriod { get; set; } = "24 hours";
+        public bool isSafeToEnterAtCurrentPrice { get; set; } = false;
+        public string currentEntryReason { get; set; } = string.Empty;
         public List<string>? factors { get; set; }
         public string summary { get; set; } = string.Empty;
         public List<string>? sources { get; set; }
@@ -1056,6 +1091,8 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         public string orderType { get; set; } = "Market";
         public string timeToBestEntry { get; set; } = string.Empty;
         public string validityPeriod { get; set; } = "24 hours";
+        public bool isSafeToEnterAtCurrentPrice { get; set; } = false;
+        public string currentEntryReason { get; set; } = string.Empty;
         public List<string>? factors { get; set; }
         public string rationale { get; set; } = string.Empty;
     }

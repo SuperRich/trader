@@ -258,6 +258,8 @@ With the TradingView analysis feature, you can analyze chart patterns and get AI
   "orderType": "LimitBuy",
   "timeToBestEntry": "2-3 hours",
   "validUntil": "2025-03-11T12:34:56Z",
+  "isSafeToEnterAtCurrentPrice": true,
+  "currentEntryReason": "While the best entry is at 44850.00, entering at the current price of 45120.50 still provides a favorable risk-reward ratio of 1.4:1. Price is currently consolidating above key support at 45000 with strong momentum indicators.",
   "riskRewardRatio": 1.5,
   "factors": [
     "Price broke above key resistance at 45000",
@@ -321,6 +323,45 @@ Similarly, if the recommendation is to sell BTCUSD with a current price of $45,0
 ```
 
 This feature helps traders execute trades more effectively by specifying not just what to trade, but how to enter the position.
+
+### Entry Safety Indicator
+
+The analysis now includes two fields that help you decide whether to enter a trade at the current market price:
+
+1. `isSafeToEnterAtCurrentPrice`: A boolean flag indicating whether it's still acceptable to enter at the current price
+2. `currentEntryReason`: A detailed explanation of why it's safe or unsafe to enter at the current price
+
+```json
+"currentPrice": 45120.50,
+"bestEntryPrice": 44850.00,
+"isSafeToEnterAtCurrentPrice": true,
+"currentEntryReason": "While the best entry is at 44850.00, entering at the current price of 45120.50 still provides a favorable risk-reward ratio of 1.4:1. Price is currently consolidating above key support at 45000 with strong momentum indicators."
+```
+
+This feature helps traders make more informed decisions about:
+
+- **When to wait vs. when to act immediately**: If `isSafeToEnterAtCurrentPrice` is `true`, you can enter at the current price without significantly compromising the trade setup, even if waiting for the best entry would be slightly better.
+
+- **Risk management**: If `isSafeToEnterAtCurrentPrice` is `false`, it indicates that entering at the current price would significantly reduce the risk-reward ratio or increase risk compared to waiting for the best entry price.
+
+- **Understanding the specific risks**: The `currentEntryReason` field provides detailed reasoning about why it's safe or unsafe to enter at the current price, including specific price levels, risk-reward calculations, or technical factors.
+
+The AI considers several factors when determining entry safety:
+
+- **Distance from best entry**: How far the current price is from the optimal entry point
+- **Volatility**: Higher volatility may make immediate entry more risky
+- **Proximity to key levels**: Whether the current price is near important support/resistance levels
+- **Overall market conditions**: Trend strength, momentum, and other contextual factors
+
+For example, if a buy recommendation shows:
+```json
+"currentPrice": 45120.50,
+"bestEntryPrice": 44850.00,
+"isSafeToEnterAtCurrentPrice": false,
+"currentEntryReason": "Current price is too far from optimal entry, reducing risk-reward ratio from 2:1 to 1.2:1. Price is approaching resistance at 45200 and showing signs of short-term exhaustion. Wait for pullback to 44850 support level."
+```
+
+This detailed explanation helps you understand exactly why you should wait for a better entry point rather than entering immediately, providing specific technical reasons and risk-reward calculations.
 
 ### Best Entry Price
 
