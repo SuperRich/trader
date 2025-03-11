@@ -630,3 +630,127 @@ If you encounter errors when using TraderMade, be aware of these limitations:
    ```bash
    curl https://localhost:7001/api/trading/analyze/BTCUSD/Polygon
    ```
+
+## Position Sizing Calculator
+
+The API now includes a position sizing calculator that helps traders determine:
+
+1. The maximum position size they can take based on their account balance and leverage
+2. The position size required to achieve specific profit targets
+3. The risk associated with each position
+
+### Using the Position Sizing Calculator
+
+By default, the calculator assumes:
+- Account balance: 201 GBP
+- Leverage: 1:1000
+- Default profit targets: 50, 100, 200, 500, and 1000 GBP
+
+You can customize these parameters in your API requests using query parameters:
+
+- `accountBalance`: Your trading account balance in GBP (default: 201)
+- `leverage`: Your account leverage as a number (e.g., 1000 for 1:1000 leverage)
+- `targetProfits`: Comma-separated list of profit targets in GBP
+
+#### Example cURL Commands
+
+**Basic usage with default parameters:**
+```bash
+curl "https://localhost:7001/api/trading/analyze/EURUSD/TraderMade"
+```
+
+**Custom account balance and leverage:**
+```bash
+curl "https://localhost:7001/api/trading/analyze/EURUSD/TraderMade?accountBalance=500&leverage=500"
+```
+
+**Custom profit targets:**
+```bash
+curl "https://localhost:7001/api/trading/analyze/EURUSD/TraderMade?targetProfits=100,200,300"
+```
+
+**All parameters combined:**
+```bash
+curl "https://localhost:7001/api/trading/analyze/EURUSD/TraderMade?accountBalance=500&leverage=500&targetProfits=100,200,300"
+```
+
+**With trading recommendations endpoint:**
+```bash
+curl "https://localhost:7001/api/trading/recommendations?count=3&accountBalance=1000&leverage=200&targetProfits=500,1000,2000"
+```
+
+### Specifying Multiple Target Profits
+
+The `targetProfits` parameter accepts a comma-separated list of values, allowing you to calculate position sizes for multiple profit targets simultaneously. For example:
+
+- `targetProfits=50,100,200` - Calculate position sizes needed to make 50, 100, and 200 GBP profit
+- `targetProfits=100,500,1000,5000` - Calculate for larger profit targets
+- `targetProfits=10,25,50,75,100` - Calculate for smaller, more granular profit targets
+
+This is particularly useful for:
+- Planning different profit scenarios (conservative, moderate, aggressive)
+- Understanding how position size scales with profit targets
+- Finding the optimal risk-reward balance for your trading style
+
+### Position Sizing Response Example
+
+The API response includes a `positionSizing` object with the following information:
+
+```json
+{
+  // ... other response fields ...
+  "positionSizing": {
+    "accountBalance": 201,
+    "leverage": 1000,
+    "symbol": "EURUSD",
+    "currentPrice": 1.0876,
+    "maxPositionSize": 201000,
+    "maxLotSize": 2.01,
+    "profitTargets": {
+      "50": {
+        "targetProfit": 50,
+        "requiredPositionSize": 50000,
+        "requiredLotSize": 0.5,
+        "priceMovementRequired": 0.00108,
+        "priceMovementPercent": 0.1,
+        "riskAmount": 50,
+        "riskPercentage": 24.88
+      },
+      "100": {
+        "targetProfit": 100,
+        "requiredPositionSize": 100000,
+        "requiredLotSize": 1.0,
+        "priceMovementRequired": 0.00217,
+        "priceMovementPercent": 0.2,
+        "riskAmount": 100,
+        "riskPercentage": 49.75
+      }
+      // Additional targets...
+    }
+  }
+}
+```
+
+### Understanding the Position Sizing Response
+
+- **accountBalance**: Your trading account balance in GBP
+- **leverage**: Your account leverage (e.g., 1000 for 1:1000)
+- **symbol**: The trading pair being analyzed
+- **currentPrice**: The current market price of the symbol
+- **maxPositionSize**: The maximum position size you can take with your account and leverage
+- **maxLotSize**: The maximum position size expressed in standard lots
+
+For each profit target, you'll see:
+- **targetProfit**: The profit target in GBP
+- **requiredPositionSize**: The position size needed to achieve this profit target
+- **requiredLotSize**: The position size expressed in standard lots
+- **priceMovementRequired**: The price movement needed to achieve the profit target
+- **priceMovementPercent**: The price movement as a percentage
+- **riskAmount**: The amount at risk in GBP (assuming 1:1 risk-reward)
+- **riskPercentage**: The risk as a percentage of your account balance
+
+This information helps traders understand:
+- How much they can trade with their current account
+- What position size is needed to achieve specific profit targets
+- How much risk they're taking on with each position
+- What price movement is required to reach their profit goals

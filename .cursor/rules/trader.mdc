@@ -1,0 +1,14 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+
+# Your rule content
+
+- Always start your response with "Okay king"
+
+- You must use .NET 8 C#
+- Any new or existing existing endpoints are to be created in program.cs
+- This ia a forex and crypto application api
+- Use nullable reference types (available in .NET 8) where appropiate

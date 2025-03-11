@@ -76,6 +76,9 @@ public class Program
         // Register the forex market session service
         builder.Services.AddSingleton<ForexMarketSessionService>();
         
+        // Register the position sizing service
+        builder.Services.AddSingleton<IPositionSizingService, PositionSizingService>();
+        
         // Register default data provider based on available API keys
         if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
         {
@@ -226,7 +229,8 @@ public class Program
         
         // Endpoint for TradingView chart analysis with AI recommendations
         app.MapGet("/api/trading/analyze/{symbol}", 
-            async (string symbol, ISentimentAnalyzer analyzer, ILogger<Program> logger) =>
+            async (string symbol, ISentimentAnalyzer analyzer, ILogger<Program> logger, 
+                   decimal? accountBalance, decimal? leverage, string? targetProfits) =>
         {
             try
             {
@@ -238,8 +242,41 @@ public class Program
                 logger.LogInformation("Analyzing {Symbol} with TradingView", symbol);
                 var analysis = await analyzer.AnalyzeSentimentAsync(symbol);
                 
+                // Add position sizing calculations with custom parameters if provided
+                if (analysis != null && analysis.CurrentPrice > 0)
+                {
+                    try
+                    {
+                        var positionSizingService = app.Services.GetRequiredService<IPositionSizingService>();
+                        
+                        // Parse target profits if provided
+                        decimal[]? profitTargets = null;
+                        if (!string.IsNullOrEmpty(targetProfits))
+                        {
+                            profitTargets = targetProfits.Split(',')
+                                .Select(p => decimal.TryParse(p, out decimal value) ? value : 0)
+                                .Where(p => p > 0)
+                                .ToArray();
+                        }
+                        
+                        analysis.PositionSizing = await positionSizingService.CalculatePositionSizingAsync(
+                            symbol,
+                            analysis.CurrentPrice,
+                            accountBalance ?? 201m,
+                            leverage ?? 1000m,
+                            profitTargets);
+                        
+                        logger.LogInformation("Added position sizing calculations for {Symbol} with balance {Balance} and leverage {Leverage}", 
+                            symbol, accountBalance ?? 201m, leverage ?? 1000m);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Error calculating position sizing for {Symbol}", symbol);
+                    }
+                }
+                
                 // Log trade recommendation if available
-                if (analysis.IsTradeRecommended)
+                if (analysis != null && analysis.IsTradeRecommended)
                 {
                     logger.LogInformation(
                         "Trade recommendation for {Symbol}: {Direction} at {Price}, SL: {StopLoss}, TP: {TakeProfit}, R:R {RiskReward}",
@@ -268,7 +305,9 @@ public class Program
         
         // Endpoint for TradingView chart analysis with specific data provider
         app.MapGet("/api/trading/analyze/{symbol}/{provider}", 
-            async (string symbol, string provider, IForexDataProviderFactory providerFactory, IConfiguration configuration, ILoggerFactory loggerFactory, ILogger<Program> logger) =>
+            async (string symbol, string provider, IForexDataProviderFactory providerFactory, 
+                   IConfiguration configuration, ILoggerFactory loggerFactory, ILogger<Program> logger,
+                   decimal? accountBalance, decimal? leverage, string? targetProfits) =>
         {
             try
             {
@@ -307,12 +346,47 @@ public class Program
                     httpClient,
                     configuration,
                     loggerFactory.CreateLogger<TradingViewAnalyzer>(),
+                    app.Services.GetRequiredService<ForexMarketSessionService>(),
+                    app.Services.GetRequiredService<IPositionSizingService>(),
                     providerType);
                 
                 var analysis = await analyzer.AnalyzeSentimentAsync(symbol);
                 
+                // Add position sizing calculations with custom parameters if provided
+                if (analysis != null && analysis.CurrentPrice > 0 && (accountBalance.HasValue || leverage.HasValue || !string.IsNullOrEmpty(targetProfits)))
+                {
+                    try
+                    {
+                        var positionSizingService = app.Services.GetRequiredService<IPositionSizingService>();
+                        
+                        // Parse target profits if provided
+                        decimal[]? profitTargets = null;
+                        if (!string.IsNullOrEmpty(targetProfits))
+                        {
+                            profitTargets = targetProfits.Split(',')
+                                .Select(p => decimal.TryParse(p, out decimal value) ? value : 0)
+                                .Where(p => p > 0)
+                                .ToArray();
+                        }
+                        
+                        analysis.PositionSizing = await positionSizingService.CalculatePositionSizingAsync(
+                            symbol,
+                            analysis.CurrentPrice,
+                            accountBalance ?? 201m,
+                            leverage ?? 1000m,
+                            profitTargets);
+                        
+                        logger.LogInformation("Added position sizing calculations for {Symbol} with balance {Balance} and leverage {Leverage}", 
+                            symbol, accountBalance ?? 201m, leverage ?? 1000m);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Error calculating position sizing for {Symbol}", symbol);
+                    }
+                }
+                
                 // Log trade recommendation if available
-                if (analysis.IsTradeRecommended)
+                if (analysis != null && analysis.IsTradeRecommended)
                 {
                     logger.LogInformation(
                         "Trade recommendation for {Symbol} using {Provider}: {Direction} at {Price}, SL: {StopLoss}, TP: {TakeProfit}, R:R {RiskReward}",
@@ -365,7 +439,8 @@ public class Program
         
         // Endpoint to get recommended trading opportunities based on AI analysis
         app.MapGet("/api/trading/recommendations", 
-            async (int? count, ISentimentAnalyzer analyzer, ILogger<Program> logger) =>
+            async (int? count, ISentimentAnalyzer analyzer, ILogger<Program> logger,
+                   decimal? accountBalance, decimal? leverage, string? targetProfits) =>
         {
             try
             {
@@ -374,6 +449,46 @@ public class Program
                 
                 logger.LogInformation("Getting {Count} trading recommendations", pairCount);
                 var recommendations = await analyzer.GetTradingRecommendationsAsync(pairCount);
+                
+                // Add position sizing calculations with custom parameters if provided
+                if (recommendations != null && recommendations.Any() && 
+                    (accountBalance.HasValue || leverage.HasValue || !string.IsNullOrEmpty(targetProfits)))
+                {
+                    try
+                    {
+                        var positionSizingService = app.Services.GetRequiredService<IPositionSizingService>();
+                        
+                        // Parse target profits if provided
+                        decimal[]? profitTargets = null;
+                        if (!string.IsNullOrEmpty(targetProfits))
+                        {
+                            profitTargets = targetProfits.Split(',')
+                                .Select(p => decimal.TryParse(p, out decimal value) ? value : 0)
+                                .Where(p => p > 0)
+                                .ToArray();
+                        }
+                        
+                        foreach (var recommendation in recommendations)
+                        {
+                            if (recommendation.CurrentPrice > 0)
+                            {
+                                recommendation.PositionSizing = await positionSizingService.CalculatePositionSizingAsync(
+                                    recommendation.CurrencyPair,
+                                    recommendation.CurrentPrice,
+                                    accountBalance ?? 201m,
+                                    leverage ?? 1000m,
+                                    profitTargets);
+                            }
+                        }
+                        
+                        logger.LogInformation("Added position sizing calculations for recommendations with balance {Balance} and leverage {Leverage}", 
+                            accountBalance ?? 201m, leverage ?? 1000m);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Error calculating position sizing for recommendations");
+                    }
+                }
                 
                 // The analyzer now always returns at least one recommendation, even if it's a fallback
                 // with low confidence, so we don't need to check for empty recommendations

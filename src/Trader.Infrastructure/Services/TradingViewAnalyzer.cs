@@ -18,6 +18,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     private readonly string _perplexityApiKey;
     private readonly ILogger<TradingViewAnalyzer> _logger;
     private readonly ForexMarketSessionService _marketSessionService;
+    private readonly IPositionSizingService _positionSizingService;
     
     // Cache for recent analysis results to ensure consistency between endpoints
     private readonly Dictionary<string, (SentimentAnalysisResult Result, DateTime Timestamp)> _analysisCache = 
@@ -34,11 +35,18 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         HttpClient httpClient,
         IConfiguration configuration,
         ILogger<TradingViewAnalyzer> logger,
+        ForexMarketSessionService marketSessionService,
+        IPositionSizingService positionSizingService,
         DataProviderType? providerType = null)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _marketSessionService = new ForexMarketSessionService();
+        _marketSessionService = marketSessionService ?? throw new ArgumentNullException(nameof(marketSessionService));
+        _positionSizingService = positionSizingService ?? throw new ArgumentNullException(nameof(positionSizingService));
+        
+        // Initialize _dataProvider to avoid null warning
+        _dataProvider = dataProviderFactory?.GetProvider(providerType ?? DataProviderType.Mock) ?? 
+            throw new ArgumentNullException(nameof(dataProviderFactory));
         
         // Try to get the API key from configuration (checking both regular config and environment variables)
         var perplexityApiKey = configuration["Perplexity:ApiKey"];
@@ -73,7 +81,6 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         // If a specific provider type is provided, use it
         if (providerType.HasValue)
         {
-            _dataProvider = dataProviderFactory.GetProvider(providerType.Value);
             _logger.LogInformation("TradingViewAnalyzer using specified {ProviderType} data provider", providerType.Value);
         }
         else
@@ -279,6 +286,11 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                         result.TradeRecommendation,
                         result.MarketSession.CurrentSession,
                         result.MarketSession.LiquidityLevel);
+                    
+                    // Add position sizing calculations
+                    result.PositionSizing = await _positionSizingService.CalculatePositionSizingAsync(
+                        symbol,
+                        result.CurrentPrice);
                     
                     return result;
                 }
@@ -1049,7 +1061,8 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             analysis.Sentiment,
             analysis.TradeRecommendation);
         
-        return new ForexRecommendation
+        // Make sure to copy the position sizing info
+        var recommendation = new ForexRecommendation
         {
             CurrencyPair = analysis.CurrencyPair,
             Direction = direction,
@@ -1068,8 +1081,11 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             Rationale = analysis.Summary,
             Timestamp = DateTime.UtcNow,
             MarketSession = analysis.MarketSession,
-            SessionWarning = analysis.SessionWarning
+            SessionWarning = analysis.SessionWarning,
+            PositionSizing = analysis.PositionSizing
         };
+        
+        return recommendation;
     }
     
     #region API Response Classes

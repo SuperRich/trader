@@ -1,5 +1,10 @@
 namespace Trader.Core.Services;
 
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Trader.Core.Models;
+
 /// <summary>
 /// Interface for services that provide sentiment analysis for forex currency pairs.
 /// </summary>
@@ -193,6 +198,11 @@ public class SentimentAnalysisResult
     /// Explains why it's safe or unsafe to enter at the current price, providing specific reasoning.
     /// </summary>
     public string CurrentEntryReason { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Position sizing information for this currency pair.
+    /// </summary>
+    public PositionSizingInfo? PositionSizing { get; set; }
 }
 
 /// <summary>
@@ -370,4 +380,9 @@ public class ForexRecommendation
     /// Explains why it's safe or unsafe to enter at the current price, providing specific reasoning.
     /// </summary>
     public string CurrentEntryReason { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Position sizing information for this currency pair.
+    /// </summary>
+    public PositionSizingInfo? PositionSizing { get; set; }
 }
