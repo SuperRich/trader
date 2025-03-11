@@ -23,6 +23,7 @@ public interface ISentimentAnalyzer
 /// <summary>
 /// Represents the overall sentiment type for a financial instrument.
 /// </summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter))]
 public enum SentimentType
 {
     /// <summary>
@@ -42,22 +43,59 @@ public enum SentimentType
 }
 
 /// <summary>
+/// Represents the type of order to be placed.
+/// </summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter))]
+public enum OrderType
+{
+    /// <summary>
+    /// Execute a buy trade immediately at the current market price.
+    /// </summary>
+    MarketBuy,
+    
+    /// <summary>
+    /// Execute a sell trade immediately at the current market price.
+    /// </summary>
+    MarketSell,
+    
+    /// <summary>
+    /// Buy when price falls to a specified level below current price.
+    /// </summary>
+    LimitBuy,
+    
+    /// <summary>
+    /// Sell when price rises to a specified level above current price.
+    /// </summary>
+    LimitSell,
+    
+    /// <summary>
+    /// Buy when price rises to a specified level above current price.
+    /// </summary>
+    StopBuy,
+    
+    /// <summary>
+    /// Sell when price falls to a specified level below current price.
+    /// </summary>
+    StopSell
+}
+
+/// <summary>
 /// Contains the result of a sentiment analysis for a currency pair.
 /// </summary>
 public class SentimentAnalysisResult
 {
     /// <summary>
-    /// The currency pair being analyzed (e.g., "EURUSD").
+    /// The currency pair that was analyzed (e.g., "EURUSD").
     /// </summary>
     public string CurrencyPair { get; set; } = string.Empty;
     
     /// <summary>
-    /// The overall sentiment (Bullish, Bearish, or Neutral).
+    /// The overall sentiment for the currency pair.
     /// </summary>
     public SentimentType Sentiment { get; set; }
     
     /// <summary>
-    /// A confidence score between 0.0 and 1.0 indicating the strength of the sentiment.
+    /// Confidence score for the sentiment analysis (0.0 to 1.0).
     /// </summary>
     public decimal Confidence { get; set; }
     
@@ -102,6 +140,16 @@ public class SentimentAnalysisResult
     public decimal TakeProfitPrice { get; set; }
     
     /// <summary>
+    /// The optimal entry price for the trade, which may differ from the current price.
+    /// </summary>
+    public decimal BestEntryPrice { get; set; }
+    
+    /// <summary>
+    /// The type of order to place (MarketBuy, MarketSell, LimitBuy, LimitSell, StopBuy, StopSell).
+    /// </summary>
+    public OrderType OrderType { get; set; } = OrderType.MarketBuy;
+    
+    /// <summary>
     /// The risk-to-reward ratio of the recommended trade.
     /// </summary>
     public decimal RiskRewardRatio => 
@@ -120,6 +168,21 @@ public class SentimentAnalysisResult
     /// Information about the current forex market session.
     /// </summary>
     public MarketSessionInfo? MarketSession { get; set; }
+    
+    /// <summary>
+    /// Warning message if the current market session is not optimal for trading.
+    /// </summary>
+    public string? SessionWarning { get; set; }
+    
+    /// <summary>
+    /// Estimated time until the best entry price might be reached (e.g., "2-3 hours", "1-2 days").
+    /// </summary>
+    public string TimeToBestEntry { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// The date and time until which this recommendation is considered valid.
+    /// </summary>
+    public DateTime ValidUntil { get; set; } = DateTime.UtcNow.AddDays(1);
 }
 
 /// <summary>
@@ -161,6 +224,16 @@ public class MarketSessionInfo
     /// The next session that will become active.
     /// </summary>
     public string NextSession { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Current UTC time when this information was calculated.
+    /// </summary>
+    public DateTime CurrentTimeUtc { get; set; }
+    
+    /// <summary>
+    /// The exact UTC time when the next session will start.
+    /// </summary>
+    public DateTime NextSessionStartTimeUtc { get; set; }
 }
 
 /// <summary>
@@ -177,6 +250,11 @@ public class ForexRecommendation
     /// The recommended trade direction (Buy or Sell).
     /// </summary>
     public string Direction { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// The type of order to place (Market, BuyLimit, SellLimit, BuyStop, SellStop).
+    /// </summary>
+    public OrderType OrderType { get; set; } = OrderType.MarketBuy;
     
     /// <summary>
     /// The sentiment type for this recommendation.
@@ -202,6 +280,11 @@ public class ForexRecommendation
     /// Recommended stop loss level.
     /// </summary>
     public decimal StopLossPrice { get; set; }
+    
+    /// <summary>
+    /// The optimal entry price for the trade, which may differ from the current price.
+    /// </summary>
+    public decimal BestEntryPrice { get; set; }
     
     /// <summary>
     /// Potential risk-reward ratio for this trade.
@@ -252,4 +335,19 @@ public class ForexRecommendation
     /// Information about the current forex market session.
     /// </summary>
     public MarketSessionInfo? MarketSession { get; set; }
+    
+    /// <summary>
+    /// Warning message if the current market session is not optimal for trading.
+    /// </summary>
+    public string? SessionWarning { get; set; }
+    
+    /// <summary>
+    /// Estimated time until the best entry price might be reached (e.g., "2-3 hours", "1-2 days").
+    /// </summary>
+    public string TimeToBestEntry { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// The date and time until which this recommendation is considered valid.
+    /// </summary>
+    public DateTime ValidUntil { get; set; } = DateTime.UtcNow.AddDays(1);
 }

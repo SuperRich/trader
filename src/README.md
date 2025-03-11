@@ -252,8 +252,12 @@ With the TradingView analysis feature, you can analyze chart patterns and get AI
   "sentiment": "Bullish",
   "confidence": 0.85,
   "currentPrice": 45120.50,
+  "bestEntryPrice": 44850.00,
   "takeProfitPrice": 46500.00,
   "stopLossPrice": 44200.00,
+  "orderType": "LimitBuy",
+  "timeToBestEntry": "2-3 hours",
+  "validUntil": "2025-03-11T12:34:56Z",
   "riskRewardRatio": 1.5,
   "factors": [
     "Price broke above key resistance at 45000",
@@ -264,15 +268,113 @@ With the TradingView analysis feature, you can analyze chart patterns and get AI
   "timestamp": "2025-03-10T12:34:56Z",
   "marketSession": {
     "currentSession": "NewYork",
-    "description": "New York Session (North American markets) - High liquidity, often volatile movements",
+    "description": "New York Session (North American markets) - 12:00-21:00 UTC - High liquidity, often volatile movements",
     "liquidityLevel": 4,
     "recommendedSession": "NewYork",
-    "recommendationReason": "The New York session offers strong liquidity for BTCUSD with US economic data releases often creating trading opportunities. Volatility can be high during this period.",
+    "recommendationReason": "The New York session (12:00-21:00 UTC) offers strong liquidity for BTCUSD with US economic data releases often creating trading opportunities. Volatility can be high during this period.",
     "timeUntilNextSession": "5h 30m",
-    "nextSession": "Asian"
-  }
+    "nextSession": "Asian",
+    "currentTimeUtc": "2025-03-10T15:30:00Z",
+    "nextSessionStartTimeUtc": "2025-03-10T23:00:00Z"
+  },
+  "sessionWarning": "Warning: Current market session (NewYork) is not optimal for trading BTCUSD. Consider waiting for the London session for better liquidity and trading conditions."
 }
 ```
+
+## New Features
+
+### Order Types
+
+The analysis now includes an `orderType` field that specifies the recommended type of order to place:
+
+- **MarketBuy/MarketSell**: Execute the trade immediately at the current market price. Use when the current price is already at a good entry point.
+  
+- **LimitBuy/LimitSell**: Wait for the price to reach a better level before entering.
+  - LimitBuy: Place a buy order at a price lower than the current price (waiting for price to drop)
+  - LimitSell: Place a sell order at a price higher than the current price (waiting for price to rise)
+  
+- **StopBuy/StopSell**: Wait for a breakout/breakdown confirmation before entering.
+  - StopBuy: Place a buy order at a price higher than the current price (waiting for upward breakout)
+  - StopSell: Place a sell order at a price lower than the current price (waiting for downward breakdown)
+
+The system automatically determines the appropriate order type based on:
+- The relationship between current price and best entry price:
+  - For buy orders: If best entry < current price → LimitBuy; if best entry > current price → StopBuy
+  - For sell orders: If best entry > current price → LimitSell; if best entry < current price → StopSell
+- The market context and trading setup
+- The risk-reward profile of the trade
+
+For example, if the recommendation is to buy BTCUSD with a current price of $45,000 but the best entry price is $44,500, the system will suggest a "LimitBuy" order type, indicating you should place a limit order to buy at the lower price of $44,500.
+
+```json
+"currentPrice": 45000.00,
+"bestEntryPrice": 44500.00,
+"orderType": "LimitBuy"
+```
+
+Similarly, if the recommendation is to sell BTCUSD with a current price of $45,000 but the best entry price is $46,000, the system will suggest a "LimitSell" order type, indicating you should place a limit order to sell at the higher price of $46,000.
+
+```json
+"currentPrice": 45000.00,
+"bestEntryPrice": 46000.00,
+"orderType": "LimitSell"
+```
+
+This feature helps traders execute trades more effectively by specifying not just what to trade, but how to enter the position.
+
+### Best Entry Price
+
+The analysis now includes a `bestEntryPrice` field that provides the optimal entry price for the trade, which may differ from the current price. This is especially useful when:
+
+- The current price is in the middle of a range and a better entry would be at support/resistance
+- A pullback to a key level would provide a better risk-reward ratio
+- The market is overextended and a retracement would offer a better entry
+
+### Time to Best Entry
+
+The analysis now includes a `timeToBestEntry` field that provides an estimate of how long it might take for the price to reach the optimal entry level. This helps traders:
+
+- Plan their trading schedule and set appropriate alerts
+- Understand the urgency (or lack thereof) of the trading opportunity
+- Make informed decisions about whether to wait for the best entry or execute immediately
+
+For example:
+```json
+"timeToBestEntry": "2-3 hours"
+```
+
+This indicates that based on current market conditions and recent price action, the price is expected to reach the best entry level within 2-3 hours. If the estimate is "Unknown", it means the system cannot reliably predict when the price might reach the best entry level.
+
+### Recommendation Validity Period
+
+The analysis now includes a `validUntil` field that specifies when the recommendation expires. This helps traders:
+
+- Understand how long the analysis remains relevant
+- Know when to seek updated recommendations
+- Avoid acting on outdated information
+
+For example:
+```json
+"validUntil": "2025-03-11T12:34:56Z"
+```
+
+This indicates that the recommendation is valid until March 11, 2025, at 12:34:56 UTC. After this time, market conditions may have changed significantly, and the recommendation should be considered outdated.
+
+The validity period is determined based on:
+- The timeframes used in the analysis (higher timeframes typically result in longer validity periods)
+- Market volatility (more volatile markets typically have shorter validity periods)
+- Upcoming economic events or news that might impact the market
+- The nature of the trading setup (some patterns have naturally shorter lifespans than others)
+
+### Market Session Warnings
+
+When the current market session isn't the recommended one for trading a particular currency pair, the API will now include a `sessionWarning` field with a message explaining:
+
+- Which session is currently active
+- Which session would be better for trading this pair
+- A recommendation to consider waiting for the optimal session
+
+This helps traders make more informed decisions about timing their trades for better liquidity and market conditions.
 
 ## Forex Market Sessions
 
@@ -285,18 +387,20 @@ Each analysis and recommendation includes market session data:
 ```json
 "marketSession": {
   "currentSession": "LondonNewYorkOverlap",
-  "description": "London-New York Overlap - Highest liquidity period, often largest price movements",
+  "description": "London-New York Overlap - 12:00-16:00 UTC - Highest liquidity period, often largest price movements",
   "liquidityLevel": 5,
   "recommendedSession": "LondonNewYorkOverlap",
-  "recommendationReason": "The London-New York overlap (13:00-16:00 UTC) provides the highest liquidity for EURUSD, with maximum market participation and often the largest price movements of the day. This is generally the optimal trading window.",
+  "recommendationReason": "The London-New York overlap (12:00-16:00 UTC) provides the highest liquidity for EURUSD, with maximum market participation and often the largest price movements of the day. This is generally the optimal trading window.",
   "timeUntilNextSession": "3h 45m",
-  "nextSession": "Asian"
+  "nextSession": "Asian",
+  "currentTimeUtc": "2025-03-10T19:15:00Z",
+  "nextSessionStartTimeUtc": "2025-03-10T23:00:00Z"
 }
 ```
 
 ### Understanding Market Sessions
 
-The forex market operates 24 hours a day, but is divided into major sessions:
+The forex market operates 24 hours a day, but is divided into major sessions (all times in UTC/GMT):
 
 1. **Asian Session** (23:00-08:00 UTC)
    - Tokyo, Singapore, Hong Kong markets
@@ -317,16 +421,28 @@ The forex market operates 24 hours a day, but is divided into major sessions:
    - Asian-London Overlap (07:00-08:00 UTC): Increasing liquidity
    - London-New York Overlap (12:00-16:00 UTC): Highest liquidity period
 
+### Cryptocurrencies and Market Sessions
+
+**Important Note**: Unlike forex, cryptocurrencies trade 24/7 with consistent liquidity across all sessions. For crypto pairs like BTCUSD and ETHUSD:
+
+- No session warnings will be displayed as they can be traded at any time
+- Session information is still provided for context, but all sessions have high liquidity
+- While trading volume may vary slightly across different times of day, cryptocurrencies don't follow the traditional forex session restrictions
+- The system automatically detects cryptocurrency pairs and treats them appropriately
+
 ### Using Session Information
 
 - **Liquidity Level**: A rating from 1-5 indicating current liquidity (5 being highest)
 - **Recommended Session**: The optimal session for trading a specific currency pair
 - **Time Until Next Session**: Helps you plan when to check back for better conditions
+- **Next Session Start Time**: The exact UTC time when the next session will begin
 
 This information can help you:
 - Time your trades for optimal liquidity
 - Understand why certain pairs move more during specific sessions
 - Plan your trading schedule around the most active periods for your preferred pairs
+
+> **Note**: All times are provided in UTC/GMT for consistency. Convert to your local time zone as needed.
 
 ## Using Multiple Data Providers
 

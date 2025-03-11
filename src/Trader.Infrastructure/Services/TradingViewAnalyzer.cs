@@ -211,6 +211,10 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                         TradeRecommendation = tradeRecommendation,
                         StopLossPrice = sentimentData.stopLossPrice,
                         TakeProfitPrice = sentimentData.takeProfitPrice,
+                        BestEntryPrice = sentimentData.bestEntryPrice > 0 ? sentimentData.bestEntryPrice : sentimentData.currentPrice,
+                        OrderType = ParseOrderType(sentimentData.orderType, sentimentData.direction, sentimentData.currentPrice, sentimentData.bestEntryPrice),
+                        TimeToBestEntry = !string.IsNullOrEmpty(sentimentData.timeToBestEntry) ? sentimentData.timeToBestEntry : "Unknown",
+                        ValidUntil = ParseValidityPeriod(sentimentData.validityPeriod),
                         MarketSession = new MarketSessionInfo
                         {
                             CurrentSession = sessionInfo.CurrentSession.ToString(),
@@ -219,9 +223,26 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                             RecommendedSession = sessionInfo.RecommendedSession.ToString(),
                             RecommendationReason = sessionInfo.RecommendationReason,
                             TimeUntilNextSession = FormatTimeSpan(sessionInfo.TimeUntilNextSession),
-                            NextSession = sessionInfo.NextSession.ToString()
+                            NextSession = sessionInfo.NextSession.ToString(),
+                            CurrentTimeUtc = sessionInfo.CurrentTimeUtc,
+                            NextSessionStartTimeUtc = sessionInfo.NextSessionStartTimeUtc
                         }
                     };
+                    
+                    // Add session warning if current session is not the recommended one
+                    if (sessionInfo.CurrentSession != sessionInfo.RecommendedSession && result.IsTradeRecommended)
+                    {
+                        // Check if this is a cryptocurrency pair
+                        bool isCrypto = IsCryptoPair(symbol);
+                        
+                        // Only add session warning for forex pairs, not for cryptocurrencies
+                        if (!isCrypto)
+                        {
+                            result.SessionWarning = $"Warning: Current market session ({sessionInfo.CurrentSession}) is not optimal for trading {symbol}. Consider waiting for the {sessionInfo.RecommendedSession} session for better liquidity and trading conditions.";
+                            _logger.LogInformation("Session warning added for {Symbol}: Current session {CurrentSession} is not the recommended {RecommendedSession}", 
+                                symbol, sessionInfo.CurrentSession, sessionInfo.RecommendedSession);
+                        }
+                    }
                     
                     _logger.LogInformation(
                         "Analysis for {Symbol}: {Sentiment} ({Confidence:P0}), Trade: {Trade}, Current Session: {Session} (Liquidity: {Liquidity}/5)",
@@ -400,6 +421,10 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                             CurrentPrice = recommendationData.currentPrice,
                             TakeProfitPrice = recommendationData.takeProfitPrice,
                             StopLossPrice = recommendationData.stopLossPrice,
+                            BestEntryPrice = recommendationData.bestEntryPrice > 0 ? recommendationData.bestEntryPrice : recommendationData.currentPrice,
+                            OrderType = ParseOrderType(recommendationData.orderType, recommendationData.direction, recommendationData.currentPrice, recommendationData.bestEntryPrice),
+                            TimeToBestEntry = !string.IsNullOrEmpty(recommendationData.timeToBestEntry) ? recommendationData.timeToBestEntry : "Unknown",
+                            ValidUntil = ParseValidityPeriod(recommendationData.validityPeriod),
                             Factors = recommendationData.factors ?? new List<string>(),
                             Rationale = recommendationData.rationale,
                             Timestamp = DateTime.UtcNow,
@@ -411,9 +436,26 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                                 RecommendedSession = sessionInfo.RecommendedSession.ToString(),
                                 RecommendationReason = sessionInfo.RecommendationReason,
                                 TimeUntilNextSession = FormatTimeSpan(sessionInfo.TimeUntilNextSession),
-                                NextSession = sessionInfo.NextSession.ToString()
+                                NextSession = sessionInfo.NextSession.ToString(),
+                                CurrentTimeUtc = sessionInfo.CurrentTimeUtc,
+                                NextSessionStartTimeUtc = sessionInfo.NextSessionStartTimeUtc
                             }
                         };
+                        
+                        // Add session warning if current session is not the recommended one
+                        if (sessionInfo.CurrentSession != sessionInfo.RecommendedSession)
+                        {
+                            // Check if this is a cryptocurrency pair
+                            bool isCrypto = IsCryptoPair(pair);
+                            
+                            // Only add session warning for forex pairs, not for cryptocurrencies
+                            if (!isCrypto)
+                            {
+                                recommendation.SessionWarning = $"Warning: Current market session ({sessionInfo.CurrentSession}) is not optimal for trading {pair}. Consider waiting for the {sessionInfo.RecommendedSession} session for better liquidity and trading conditions.";
+                                _logger.LogInformation("Session warning added for {Symbol}: Current session {CurrentSession} is not the recommended {RecommendedSession}", 
+                                    pair, sessionInfo.CurrentSession, sessionInfo.RecommendedSession);
+                            }
+                        }
                         
                         // Only add if the risk-reward ratio is reasonable (at least 1.5)
                         if (recommendation.RiskRewardRatio >= 1.5m)
@@ -543,6 +585,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine("2. Key support and resistance levels");
         sb.AppendLine("3. Important technical indicators and patterns");
         sb.AppendLine("4. Trading recommendation with entry, stop loss, and take profit levels");
+        sb.AppendLine("5. If the current price isn't ideal for entry, suggest a better entry price");
         sb.AppendLine();
         
         sb.AppendLine("Provide your analysis in the following JSON format:");
@@ -553,12 +596,37 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine("  \"direction\": \"Buy\", \"Sell\", or \"None\",");
         sb.AppendLine("  \"stopLossPrice\": stop loss price as decimal,");
         sb.AppendLine("  \"takeProfitPrice\": target price as decimal,");
+        sb.AppendLine("  \"bestEntryPrice\": optimal entry price as decimal (can be different from current price),");
+        sb.AppendLine("  \"orderType\": \"Market\", \"Limit\", or \"Stop\",");
+        sb.AppendLine("  \"timeToBestEntry\": \"estimated time until best entry price is reached (e.g., '2-3 hours', '1-2 days')\",");
+        sb.AppendLine("  \"validityPeriod\": \"how long this recommendation is valid for (e.g., '24 hours', '3 days')\",");
         sb.AppendLine("  \"factors\": [\"factor1\", \"factor2\", ...],");
         sb.AppendLine("  \"summary\": \"Brief summary of the analysis\",");
         sb.AppendLine("  \"sources\": []");
         sb.AppendLine("}");
         sb.AppendLine();
         sb.AppendLine("Only recommend a trade if there is a clear setup with a good risk-reward ratio (at least 1.5:1). If there's no clear trade opportunity, set direction to \"None\".");
+        sb.AppendLine();
+        sb.AppendLine("For the orderType field:");
+        sb.AppendLine("- Use \"Market\" if the trade should be executed immediately at the current price");
+        sb.AppendLine("- For Buy orders:");
+        sb.AppendLine("  - Use \"Limit\" if the best entry price is BELOW the current price (waiting for price to drop)");
+        sb.AppendLine("  - Use \"Stop\" if the best entry price is ABOVE the current price (waiting for breakout confirmation)");
+        sb.AppendLine("- For Sell orders:");
+        sb.AppendLine("  - Use \"Limit\" if the best entry price is ABOVE the current price (waiting for price to rise)");
+        sb.AppendLine("  - Use \"Stop\" if the best entry price is BELOW the current price (waiting for breakdown confirmation)");
+        sb.AppendLine();
+        sb.AppendLine("Note: The system will automatically correct the order type based on the relationship between current price and best entry price if needed.");
+        sb.AppendLine();
+        sb.AppendLine("For the timeToBestEntry field:");
+        sb.AppendLine("- Provide an estimate of how long it might take for the price to reach the best entry level");
+        sb.AppendLine("- Use formats like \"2-3 hours\", \"1-2 days\", or \"Unknown\" if it's not possible to estimate");
+        sb.AppendLine("- Base this on recent price action, volatility, and market conditions");
+        sb.AppendLine();
+        sb.AppendLine("For the validityPeriod field:");
+        sb.AppendLine("- Specify how long this recommendation should be considered valid");
+        sb.AppendLine("- Use formats like \"24 hours\", \"3 days\", \"1 week\"");
+        sb.AppendLine("- Consider market conditions, upcoming events, and the timeframe of the analysis");
         
         return sb.ToString();
     }
@@ -631,11 +699,38 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine("  \"currentPrice\": current price as decimal,");
         sb.AppendLine("  \"takeProfitPrice\": target price as decimal,");
         sb.AppendLine("  \"stopLossPrice\": stop loss price as decimal,");
+        sb.AppendLine("  \"bestEntryPrice\": optimal entry price as decimal (can be different from current price),");
+        sb.AppendLine("  \"orderType\": \"Market\", \"Limit\", or \"Stop\",");
+        sb.AppendLine("  \"timeToBestEntry\": \"estimated time until best entry price is reached (e.g., '2-3 hours', '1-2 days')\",");
+        sb.AppendLine("  \"validityPeriod\": \"how long this recommendation is valid for (e.g., '24 hours', '3 days')\",");
         sb.AppendLine("  \"factors\": [\"factor1\", \"factor2\", ...],");
         sb.AppendLine("  \"rationale\": \"Brief explanation of the recommendation\"");
         sb.AppendLine("}");
         sb.AppendLine();
         sb.AppendLine("Only recommend a trade if there is a clear setup with a good risk-reward ratio (at least 1.5:1). If there's no clear trade opportunity, set direction to \"None\".");
+        sb.AppendLine();
+        sb.AppendLine("If the current price isn't ideal for entry, suggest a better entry price in the bestEntryPrice field. This could be at a key support/resistance level, a retracement level, or a better risk-reward setup.");
+        sb.AppendLine();
+        sb.AppendLine("For the orderType field:");
+        sb.AppendLine("- Use \"Market\" if the trade should be executed immediately at the current price");
+        sb.AppendLine("- For Buy orders:");
+        sb.AppendLine("  - Use \"Limit\" if the best entry price is BELOW the current price (waiting for price to drop)");
+        sb.AppendLine("  - Use \"Stop\" if the best entry price is ABOVE the current price (waiting for breakout confirmation)");
+        sb.AppendLine("- For Sell orders:");
+        sb.AppendLine("  - Use \"Limit\" if the best entry price is ABOVE the current price (waiting for price to rise)");
+        sb.AppendLine("  - Use \"Stop\" if the best entry price is BELOW the current price (waiting for breakdown confirmation)");
+        sb.AppendLine();
+        sb.AppendLine("Note: The system will automatically correct the order type based on the relationship between current price and best entry price if needed.");
+        sb.AppendLine();
+        sb.AppendLine("For the timeToBestEntry field:");
+        sb.AppendLine("- Provide an estimate of how long it might take for the price to reach the best entry level");
+        sb.AppendLine("- Use formats like \"2-3 hours\", \"1-2 days\", or \"Unknown\" if it's not possible to estimate");
+        sb.AppendLine("- Base this on recent price action, volatility, and market conditions");
+        sb.AppendLine();
+        sb.AppendLine("For the validityPeriod field:");
+        sb.AppendLine("- Specify how long this recommendation should be considered valid");
+        sb.AppendLine("- Use formats like \"24 hours\", \"3 days\", \"1 week\"");
+        sb.AppendLine("- Consider market conditions, upcoming events, and the timeframe of the analysis");
         
         return sb.ToString();
     }
@@ -670,6 +765,54 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             "bearish" => SentimentType.Bearish,
             _ => SentimentType.Neutral
         };
+    }
+    
+    /// <summary>
+    /// Parses a string order type indicator into the OrderType enum.
+    /// </summary>
+    private OrderType ParseOrderType(string orderType, string direction, decimal currentPrice, decimal bestEntryPrice)
+    {
+        // If the AI provided an order type, check if it's consistent with the price relationship
+        // If not, override it with the correct order type
+        
+        // For buy orders:
+        if (direction.ToLower() == "buy")
+        {
+            // If best entry is below current price, it should be a limit buy
+            if (bestEntryPrice < currentPrice)
+            {
+                return OrderType.LimitBuy;
+            }
+            // If best entry is above current price, it should be a stop buy
+            else if (bestEntryPrice > currentPrice)
+            {
+                return OrderType.StopBuy;
+            }
+            // If they're the same, use market buy
+            else
+            {
+                return OrderType.MarketBuy;
+            }
+        }
+        // For sell orders:
+        else
+        {
+            // If best entry is above current price, it should be a limit sell
+            if (bestEntryPrice > currentPrice)
+            {
+                return OrderType.LimitSell;
+            }
+            // If best entry is below current price, it should be a stop sell
+            else if (bestEntryPrice < currentPrice)
+            {
+                return OrderType.StopSell;
+            }
+            // If they're the same, use market sell
+            else
+            {
+                return OrderType.MarketSell;
+            }
+        }
     }
     
     /// <summary>
@@ -766,6 +909,92 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         return $"{minutes}m";
     }
     
+    /// <summary>
+    /// Parses a validity period string (e.g., "24 hours", "3 days") and returns a DateTime
+    /// representing when the recommendation expires.
+    /// </summary>
+    private DateTime ParseValidityPeriod(string validityPeriod)
+    {
+        if (string.IsNullOrEmpty(validityPeriod))
+        {
+            // Default to 24 hours if not specified
+            return DateTime.UtcNow.AddDays(1);
+        }
+        
+        try
+        {
+            // Try to parse the string into a duration
+            validityPeriod = validityPeriod.ToLower().Trim();
+            
+            if (validityPeriod.Contains("hour"))
+            {
+                int hours = ExtractNumber(validityPeriod);
+                return DateTime.UtcNow.AddHours(hours);
+            }
+            else if (validityPeriod.Contains("day"))
+            {
+                int days = ExtractNumber(validityPeriod);
+                return DateTime.UtcNow.AddDays(days);
+            }
+            else if (validityPeriod.Contains("week"))
+            {
+                int weeks = ExtractNumber(validityPeriod);
+                return DateTime.UtcNow.AddDays(weeks * 7);
+            }
+            else if (validityPeriod.Contains("month"))
+            {
+                int months = ExtractNumber(validityPeriod);
+                return DateTime.UtcNow.AddMonths(months);
+            }
+            else
+            {
+                // If we can't parse it, default to 24 hours
+                _logger.LogWarning("Could not parse validity period: {ValidityPeriod}. Using default of 24 hours.", validityPeriod);
+                return DateTime.UtcNow.AddDays(1);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error parsing validity period: {ValidityPeriod}", validityPeriod);
+            return DateTime.UtcNow.AddDays(1);
+        }
+    }
+    
+    /// <summary>
+    /// Extracts the first number from a string.
+    /// </summary>
+    private int ExtractNumber(string input)
+    {
+        var numberString = new string(input.Where(c => char.IsDigit(c)).ToArray());
+        
+        if (string.IsNullOrEmpty(numberString))
+        {
+            return 1; // Default to 1 if no number found
+        }
+        
+        return int.Parse(numberString);
+    }
+    
+    /// <summary>
+    /// Determines if a symbol is a cryptocurrency pair.
+    /// </summary>
+    private bool IsCryptoPair(string symbol)
+    {
+        // Common cryptocurrencies
+        var cryptoCurrencies = new[] { "BTC", "ETH", "XRP", "LTC", "BCH", "ADA", "DOT", "LINK", "XLM", "SOL", "DOGE" };
+        
+        // Check if the symbol contains any cryptocurrency code
+        foreach (var crypto in cryptoCurrencies)
+        {
+            if (symbol.Contains(crypto, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
     #region API Response Classes
     
     /// <summary>
@@ -803,6 +1032,10 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         public string direction { get; set; } = string.Empty;
         public decimal stopLossPrice { get; set; }
         public decimal takeProfitPrice { get; set; }
+        public decimal bestEntryPrice { get; set; }
+        public string orderType { get; set; } = "Market";
+        public string timeToBestEntry { get; set; } = string.Empty;
+        public string validityPeriod { get; set; } = "24 hours";
         public List<string>? factors { get; set; }
         public string summary { get; set; } = string.Empty;
         public List<string>? sources { get; set; }
@@ -819,6 +1052,10 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         public decimal currentPrice { get; set; }
         public decimal stopLossPrice { get; set; }
         public decimal takeProfitPrice { get; set; }
+        public decimal bestEntryPrice { get; set; }
+        public string orderType { get; set; } = "Market";
+        public string timeToBestEntry { get; set; } = string.Empty;
+        public string validityPeriod { get; set; } = "24 hours";
         public List<string>? factors { get; set; }
         public string rationale { get; set; } = string.Empty;
     }

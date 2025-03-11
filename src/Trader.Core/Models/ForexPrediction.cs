@@ -13,6 +13,7 @@ public class ForexPrediction
     public List<string> AnalysisFactors { get; set; } = new List<string>();
 }
 
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter))]
 public enum ChartTimeframe
 {
     Minutes5 = 5,
@@ -22,6 +23,7 @@ public enum ChartTimeframe
     Day1 = 1440
 }
 
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter))]
 public enum TradingDirection
 {
     Buy,

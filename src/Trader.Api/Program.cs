@@ -56,6 +56,12 @@ public class Program
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
         
+        // Configure JSON serialization options
+        builder.Services.ConfigureHttpJsonOptions(options => {
+            options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+            options.SerializerOptions.WriteIndented = true;
+        });
+        
         // Register our services
         builder.Services.AddSingleton<PredictionService>();
         
