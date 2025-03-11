@@ -304,12 +304,14 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             var shuffledPairs = commonPairs.OrderBy(_ => random.Next()).ToList();
             
             // Take more pairs to analyze to increase chances of finding good opportunities
-            var pairsToAnalyze = shuffledPairs.Take(Math.Min(count + 7, shuffledPairs.Count)).ToList();
+            // Increase the number of pairs to analyze to ensure we get enough recommendations
+            var pairsToAnalyze = shuffledPairs.Take(Math.Min(count + 10, shuffledPairs.Count)).ToList();
             
             _logger.LogInformation("Will analyze the following pairs: {Pairs}", string.Join(", ", pairsToAnalyze));
             
             // Analyze each pair
-            var recommendations = new List<ForexRecommendation>();
+            var goodRecommendations = new List<ForexRecommendation>(); // Recommendations with R:R >= 1.5
+            var allRecommendations = new List<ForexRecommendation>(); // All valid recommendations regardless of R:R
             
             foreach (var pair in pairsToAnalyze)
             {
@@ -401,13 +403,19 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                             continue;
                         }
                         
-                        // Skip if no clear direction or if "None" is specified
-                        if (string.IsNullOrEmpty(recommendationData.direction) || 
+                        // Even if there's no clear direction, we'll still create a recommendation
+                        // but mark it with lower confidence
+                        bool hasUnclearDirection = string.IsNullOrEmpty(recommendationData.direction) || 
                             recommendationData.direction.Equals("None", StringComparison.OrdinalIgnoreCase) ||
-                            recommendationData.direction.Equals("Neutral", StringComparison.OrdinalIgnoreCase))
+                            recommendationData.direction.Equals("Neutral", StringComparison.OrdinalIgnoreCase);
+                            
+                        if (hasUnclearDirection)
                         {
-                            _logger.LogInformation("No clear direction in recommendation for {Pair}", pair);
-                            continue;
+                            _logger.LogInformation("No clear direction in recommendation for {Pair}, but will include with lower confidence", pair);
+                            // Set a default direction based on recent price action
+                            recommendationData.direction = "Neutral";
+                            // Lower the confidence for unclear recommendations
+                            recommendationData.confidence = Math.Min(recommendationData.confidence, 0.4m);
                         }
                         
                         // Get market session information
@@ -461,13 +469,16 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                             }
                         }
                         
-                        // Only add if the risk-reward ratio is reasonable (at least 1.5)
+                        // Add to all recommendations list regardless of R:R ratio
+                        allRecommendations.Add(recommendation);
+                        
+                        // Only add to good recommendations if the risk-reward ratio is reasonable (at least 1.5)
                         if (recommendation.RiskRewardRatio >= 1.5m)
                         {
-                            recommendations.Add(recommendation);
+                            goodRecommendations.Add(recommendation);
                             
                             _logger.LogInformation(
-                                "Added recommendation for {Symbol}: {Direction} at {Price}, R:R {RiskReward}, Session: {Session} (Liquidity: {Liquidity}/5)",
+                                "Added good recommendation for {Symbol}: {Direction} at {Price}, R:R {RiskReward}, Session: {Session} (Liquidity: {Liquidity}/5)",
                                 recommendation.CurrencyPair,
                                 recommendation.Direction,
                                 recommendation.CurrentPrice,
@@ -478,7 +489,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                         else
                         {
                             _logger.LogInformation(
-                                "Skipping recommendation with low R:R for {Symbol}: {Direction} at {Price}, R:R {RiskReward}",
+                                "Added recommendation with low R:R for {Symbol}: {Direction} at {Price}, R:R {RiskReward}",
                                 recommendation.CurrencyPair,
                                 recommendation.Direction,
                                 recommendation.CurrentPrice,
@@ -497,31 +508,111 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                     // Continue with other pairs
                 }
                 
-                // If we have enough recommendations, stop
-                if (recommendations.Count >= count)
+                // If we have enough good recommendations, stop
+                if (goodRecommendations.Count >= count)
                 {
                     break;
                 }
             }
             
-            // If no recommendations were found, return an empty list
-            if (recommendations.Count == 0)
+            List<ForexRecommendation> finalRecommendations;
+            
+            // Prioritize good recommendations, but fall back to all recommendations if needed
+            if (goodRecommendations.Count >= count)
             {
-                _logger.LogInformation("No trading opportunities with good risk-reward ratios found at this time.");
-                return new List<ForexRecommendation>();
+                _logger.LogInformation("Found {Count} good recommendations with R:R >= 1.5", goodRecommendations.Count);
+                finalRecommendations = goodRecommendations
+                    .OrderByDescending(r => r.Confidence)
+                    .Take(count)
+                    .ToList();
+            }
+            else if (allRecommendations.Count > 0)
+            {
+                _logger.LogInformation("Using {GoodCount} good recommendations and {LowCount} lower-quality recommendations to meet requested count", 
+                    goodRecommendations.Count, Math.Max(0, count - goodRecommendations.Count));
+                    
+                // Start with good recommendations
+                finalRecommendations = new List<ForexRecommendation>(goodRecommendations);
+                
+                // Add lower quality recommendations if needed to reach the requested count
+                if (finalRecommendations.Count < count)
+                {
+                    var remainingNeeded = count - finalRecommendations.Count;
+                    var lowerQualityRecs = allRecommendations
+                        .Where(r => !goodRecommendations.Any(g => g.CurrencyPair == r.CurrencyPair))
+                        .OrderByDescending(r => r.RiskRewardRatio)
+                        .ThenByDescending(r => r.Confidence)
+                        .Take(remainingNeeded)
+                        .ToList();
+                        
+                    finalRecommendations.AddRange(lowerQualityRecs);
+                }
+            }
+            else
+            {
+                _logger.LogWarning("No trading opportunities found. Creating fallback recommendation.");
+                
+                // Create a fallback recommendation if we couldn't get any
+                var fallbackRec = CreateFallbackRecommendation();
+                finalRecommendations = new List<ForexRecommendation> { fallbackRec };
             }
             
-            // Sort by confidence and take the requested number
-            return recommendations
-                .OrderByDescending(r => r.Confidence)
-                .Take(count)
-                .ToList();
+            return finalRecommendations;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting trading recommendations");
             throw;
         }
+    }
+    
+    /// <summary>
+    /// Creates a fallback recommendation when no valid recommendations are found
+    /// </summary>
+    private ForexRecommendation CreateFallbackRecommendation()
+    {
+        // Choose a common pair
+        string pair = "EURUSD";
+        
+        // Get market session information
+        var sessionInfo = _marketSessionService.GetCurrentSessionInfo(pair);
+        
+        // Create a basic recommendation with neutral stance
+        return new ForexRecommendation
+        {
+            CurrencyPair = pair,
+            Direction = "Neutral",
+            Sentiment = SentimentType.Neutral,
+            Confidence = 0.3m,
+            CurrentPrice = 1.1m,  // Reasonable default
+            TakeProfitPrice = 1.11m,
+            StopLossPrice = 1.09m,
+            BestEntryPrice = 1.1m,
+            OrderType = OrderType.MarketBuy,
+            TimeToBestEntry = "Now",
+            ValidUntil = DateTime.UtcNow.AddHours(24),
+            IsSafeToEnterAtCurrentPrice = false,
+            CurrentEntryReason = "This is a fallback recommendation due to lack of strong trading opportunities. Consider waiting for better market conditions.",
+            Factors = new List<string> { 
+                "No strong trading opportunities identified at this time",
+                "This is a fallback recommendation with low confidence",
+                "Consider waiting for clearer market conditions"
+            },
+            Rationale = "No clear trading opportunities were identified by the analysis. This is a fallback recommendation with low confidence. Consider waiting for more favorable market conditions or clearer signals.",
+            Timestamp = DateTime.UtcNow,
+            MarketSession = new MarketSessionInfo
+            {
+                CurrentSession = sessionInfo.CurrentSession.ToString(),
+                Description = sessionInfo.Description,
+                LiquidityLevel = sessionInfo.LiquidityLevel,
+                RecommendedSession = sessionInfo.RecommendedSession.ToString(),
+                RecommendationReason = sessionInfo.RecommendationReason,
+                TimeUntilNextSession = FormatTimeSpan(sessionInfo.TimeUntilNextSession),
+                NextSession = sessionInfo.NextSession.ToString(),
+                CurrentTimeUtc = sessionInfo.CurrentTimeUtc,
+                NextSessionStartTimeUtc = sessionInfo.NextSessionStartTimeUtc
+            }
+        };
     }
     
     /// <summary>

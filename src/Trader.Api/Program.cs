@@ -375,15 +375,8 @@ public class Program
                 logger.LogInformation("Getting {Count} trading recommendations", pairCount);
                 var recommendations = await analyzer.GetTradingRecommendationsAsync(pairCount);
                 
-                if (recommendations.Count == 0)
-                {
-                    logger.LogInformation("No trading opportunities found that meet the criteria");
-                    return Results.Ok(new { 
-                        message = "No trading opportunities with favorable risk-reward ratios found at this time. Market conditions may not be optimal for new positions.",
-                        recommendations = new List<object>()
-                    });
-                }
-                
+                // The analyzer now always returns at least one recommendation, even if it's a fallback
+                // with low confidence, so we don't need to check for empty recommendations
                 return Results.Ok(recommendations);
             }
             catch (Exception ex)
