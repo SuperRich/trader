@@ -38,6 +38,380 @@
     38	  - Sentiment analysis for any tradable asset
     39	  - Trading recommendations with precise TP/SL levels
     40	  - Risk/reward calculation and trade rationale
+    41	- Market Movers Analysis:
+    42	  - Identify top market movers based on pip movement
+    43	  - Apply EMA filters (10, 20, 50) to find trading opportunities
+    44	  - Detect EMA crossovers, bounces, and breakouts
+    45	  - Analyze both forex and crypto markets
+    46	
+    47	## API Endpoints
+    48	
+    49	### Chart Data Endpoints
+    50	
+    51	- `GET /api/forex/candles/{symbol}/{timeframe}/{count}` - Get historical candle data for any symbol
+    52	  - `symbol`: Trading symbol (e.g., "EURUSD", "BTCUSD", "XRPUSD")
+    53	  - `timeframe`: Chart timeframe (Minutes5, Minutes15, Hours1, Hours4, Day1)
+    54	  - `count`: Number of candles to retrieve (1-1000)
+    55	
+    56	- `GET /api/forex/candles/{symbol}/{timeframe}/{count}/{provider}` - Get historical candle data using a specific provider
+    57	  - `symbol`: Trading symbol (e.g., "EURUSD", "BTCUSD", "XRPUSD")
+    58	  - `timeframe`: Chart timeframe (Minutes5, Minutes15, Hours1, Hours4, Day1)
+    59	  - `count`: Number of candles to retrieve (1-1000)
+    60	  - `provider`: Data provider to use (Polygon, TraderMade, TwelveData, Mock)
+    61	
+    62	### Analysis Endpoints
+    63	
+    64	- `GET /api/trading/analyze/{symbol}` - Get AI analysis of a trading chart with buy/sell recommendation
+    65	  - `symbol`: Trading symbol to analyze (e.g., "EURUSD", "BTCUSD")
+    66	
+    67	- `GET /api/trading/analyze/{symbol}/{provider}` - Get AI analysis using a specific data provider
+    68	  - `symbol`: Trading symbol to analyze (e.g., "EURUSD", "BTCUSD")
+    69	  - `provider`: Data provider to use (Polygon, TraderMade, TwelveData, Mock)
+    70	
+    71	- `GET /api/forex/sentiment/{symbol}` - Get market sentiment analysis for a symbol
+    72	  - `symbol`: Symbol to analyze (e.g., "EURUSD", "BTCUSD")
+    73	
+    74	- `GET /api/trading/recommendations?count=3` - Get top trading recommendations with entry, stop loss, and take profit
+    75	  - `count`: Number of recommendations to return (default: 3, max: 5)
+    76	
+    77	### Legacy Endpoints
+    78	
+    79	- `GET /api/forex/prediction/{currencyPair}/{timeframe}` - Get a prediction for a specific currency pair and timeframe
+    80	- `GET /api/forex/multi-timeframe/{currencyPair}` - Get predictions across all timeframes for a currency pair
+    81	
+    82	### Market Movers Endpoints
+    83	
+    84	- `GET /api/market-movers/forex` - Get top forex market movers by pip movement
+    85	  - `count`: Number of market movers to return (default: 10, max: 25)
+    86	  - `timeframe`: Chart timeframe for analysis (default: Hours1)
+    87	  - `provider`: Data provider to use (default: TwelveData)
+    88	  - Example: `GET /api/market-movers/forex?count=5&timeframe=Hours1&provider=TwelveData`
+    89	
+    90	- `GET /api/market-movers/crypto` - Get top crypto market movers by price movement
+    91	  - `count`: Number of market movers to return (default: 10, max: 25)
+    92	  - `timeframe`: Chart timeframe for analysis (default: Hours1)
+    93	  - `provider`: Data provider to use (default: TwelveData)
+    94	  - Example: `GET /api/market-movers/crypto?count=5&timeframe=Hours1&provider=TwelveData`
+    95	
+    96	- `GET /api/market-movers/forex/ema-filtered` - Get top forex market movers with EMA filters applied
+    97	  - `count`: Number of market movers to return (default: 10, max: 25)
+    98	  - `shortTermTimeframe`: Timeframe for short-term analysis (default: Hours1)
+    99	  - `longTermTimeframe`: Timeframe for long-term analysis (default: Day1)
+    100	  - `provider`: Data provider to use (default: TwelveData)
+    101	  - Example: `GET /api/market-movers/forex/ema-filtered?count=5&shortTermTimeframe=Hours1&longTermTimeframe=Day1&provider=TwelveData`
+    102	
+    103	- `GET /api/market-movers/crypto/ema-filtered` - Get top crypto market movers with EMA filters applied
+    104	  - `count`: Number of market movers to return (default: 10, max: 25)
+    105	  - `shortTermTimeframe`: Timeframe for short-term analysis (default: Hours1)
+    106	  - `longTermTimeframe`: Timeframe for long-term analysis (default: Day1)
+    107	  - `provider`: Data provider to use (default: TwelveData)
+    108	  - Example: `GET /api/market-movers/crypto/ema-filtered?count=5&shortTermTimeframe=Hours1&longTermTimeframe=Day1&provider=TwelveData`
+    109	
+    110	#### Market Movers Response Format
+    111	
+    112	The market movers endpoints return a JSON array of market mover objects with the following structure:
+    113	
+    114	```json
+    115	[
+    116	  {
+    117	    "symbol": "EURUSD",
+    118	    "currentPrice": 1.0923,
+    119	    "previousPrice": 1.0897,
+    120	    "priceChange": 0.0026,
+    121	    "percentageChange": 0.24,
+    122	    "pipMovement": 26.0,
+    123	    "direction": "Up",
+    124	    "timeframe": "Hours1",
+    125	    "emaValues": {
+    126	      "10": 1.0915,
+    127	      "20": 1.0905,
+    128	      "50": 1.0890
+    129	    },
+    130	    "emaStatus": {
+    131	      "isAboveEma10": true,
+    132	      "isAboveEma20": true,
+    133	      "isAboveEma50": true,
+    134	      "isEma10CrossingAboveEma20": false,
+    135	      "isEma10CrossingBelowEma20": false,
+    136	      "isBouncingOffEma10": false,
+    137	      "isBouncingOffEma20": false,
+    138	      "isBouncingOffEma50": false,
+    139	      "isBreakingThroughEma10": false,
+    140	      "isBreakingThroughEma20": false,
+    141	      "isBreakingThroughEma50": false
+    142	    },
+    143	    "assetType": "Forex",
+    144	    "timestamp": "2023-06-15T14:30:00Z"
+    145	  },
+    146	  // More market movers...
+    147	]
+    148	```
+    149	
+    150	The EMA-filtered endpoints also include trading signals in the response, which can be accessed through the `emaStatus` property. The signals indicate whether the price is:
+    151	- Above/below key EMAs (10, 20, 50)
+    152	- Experiencing EMA crossovers (10 crossing 20)
+    153	- Bouncing off EMAs (price within 0.1% of an EMA)
+    154	- Breaking through EMAs (crossed within last 3 candles)
+    155	
+    156	These signals can be used to identify potential trading opportunities based on EMA strategies.
+    157	
+    158	## Setup Instructions
+    159	
+    160	### Prerequisites
+    161	
+    162	- .NET 8.0 SDK or later
+    163	- Perplexity API key (for AI analysis)
+    164	- Polygon.io API key (for real market data) or
+    165	- TraderMade API key (for real market data) or
+    166	- TwelveData API key (for real market data)
+    167	
+    168	### Configuring API Keys
+    169	
+    170	#### Option 1: Environment Variables
+    171	
+    172	Set the environment variables before running the application:
+    173	
+    174	```bash
+    175	# For Windows PowerShell
+    176	$env:TRADER_PERPLEXITY_API_KEY="your-perplexity-key-here"
+    177	$env:TRADER_POLYGON_API_KEY="your-polygon-key-here"
+    178	$env:TRADER_TRADERMADE_API_KEY="your-tradermade-key-here"
+    179	$env:TRADER_TWELVEDATA_API_KEY="your-twelvedata-key-here"
+    180	
+    181	# For Windows Command Prompt
+    182	set TRADER_PERPLEXITY_API_KEY=your-perplexity-key-here
+    183	set TRADER_POLYGON_API_KEY=your-polygon-key-here
+    184	set TRADER_TRADERMADE_API_KEY=your-tradermade-key-here
+    185	set TRADER_TWELVEDATA_API_KEY=your-twelvedata-key-here
+    186	
+    187	# For Linux/macOS
+    188	export TRADER_PERPLEXITY_API_KEY=your-perplexity-key-here
+    189	export TRADER_POLYGON_API_KEY=your-polygon-key-here
+    190	export TRADER_TRADERMADE_API_KEY=your-tradermade-key-here
+    191	export TRADER_TWELVEDATA_API_KEY=your-twelvedata-key-here
+    192	```
+    193	
+    194	#### Option 2: User Secrets (Development)
+    195	
+    196	Use .NET User Secrets for development environments:
+    197	
+    198	```bash
+    199	cd src/Trader.Api
+    200	dotnet user-secrets init  # Only needed if you haven't set up user secrets yet
+    201	dotnet user-secrets set "Perplexity:ApiKey" "your-perplexity-key-here"
+    202	dotnet user-secrets set "Polygon:ApiKey" "your-polygon-key-here"
+    203	dotnet user-secrets set "TraderMade:ApiKey" "your-tradermade-key-here"
+    204	dotnet user-secrets set "TwelveData:ApiKey" "your-twelvedata-key-here"
+    205	```
+    206	
+    207	Verify your secrets are set correctly:
+    208	```bash
+    209	dotnet user-secrets list
+    210	```
+    211	
+    212	#### Option 3: Using API Setup Endpoints
+    213	
+    214	For easier setup, use our configuration endpoints:
+    215	
+    216	1. Set up Perplexity API key:
+    217	```bash
+    218	curl -X POST https://localhost:7001/api/diagnostics/set-perplexity-key \
+    219	  -H "Content-Type: application/json" \
+    220	  -d '{"apiKey": "your-pplx-key-here", "saveToUserSecrets": true}'
+    221	```
+    222	
+    223	2. Set up Polygon.io API key:
+    224	```bash
+    225	curl -X POST https://localhost:7001/api/diagnostics/set-polygon-key \
+    226	  -H "Content-Type: application/json" \
+    227	  -d '{"apiKey": "your-polygon-key-here", "saveToUserSecrets": true}'
+    228	```
+    229	
+    230	3. Set up TraderMade API key:
+    231	```bash
+    232	curl -X POST https://localhost:7001/api/diagnostics/set-tradermade-key \
+    233	  -H "Content-Type: application/json" \
+    234	  -d '{"apiKey": "your-tradermade-key-here", "saveToUserSecrets": true}'
+    235	```
+    236	
+    237	4. Set up TwelveData API key:
+    238	```bash
+    239	curl -X POST https://localhost:7001/api/diagnostics/set-twelvedata-key \
+    240	  -H "Content-Type: application/json" \
+    241	  -d '{"apiKey": "your-twelvedata-key-here", "saveToUserSecrets": true}'
+    242	```
+    243	
+    244	### Obtaining API Keys
+    245	
+    246	#### Perplexity API
+    247	
+    248	1. Create an account at [Perplexity.ai](https://www.perplexity.ai/)
+    249	2. Go to the [API section](https://www.perplexity.ai/settings/api) in your account settings
+    250	3. Generate a new API key
+    251	4. The key will start with "pplx-"
+    252	
+    253	#### Polygon.io API
+    254	
+    255	1. Sign up for an account at [Polygon.io](https://polygon.io/)
+    256	2. Choose a plan (they offer a free tier with limited requests)
+    257	3. Find your API key in your dashboard
+    258	4. The key will be a long alphanumeric string
+    259	
+    260	#### TraderMade API
+    261	
+    262	1. Sign up for an account at [TraderMade](https://tradermade.com/)
+    263	2. Choose a plan (they offer a free tier with limited requests)
+    264	3. Find your API key in your dashboard
+    265	4. The key will be a long alphanumeric string
+    266	
+    267	To test your TraderMade API key:
+    268	
+    269	```bash
+    270	# Test your TraderMade API key
+    271	curl -X POST https://localhost:7001/api/diagnostics/set-tradermade-key \
+    272	  -H "Content-Type: application/json" \
+    273	  -d '{"apiKey": "your-tradermade-key-here", "saveToUserSecrets": true}'
+    274	```
+    275	
+    276	Once configured, you can use TraderMade as your data provider:
+    277	
+    278	```bash
+    279	# Get EURUSD data using TraderMade
+    280	curl https://localhost:7001/api/forex/candles/EURUSD/Hours1/100/TraderMade
+    281	
+    282	# Analyze BTCUSD using TraderMade data
+    283	curl https://localhost:7001/api/trading/analyze/BTCUSD/TraderMade
+    284	```
+    285	
+    286	#### TwelveData API
+    287	
+    288	1. Sign up for an account at [TwelveData](https://twelvedata.com/)
+    289	2. Choose a plan (they offer a free tier with limited requests)
+    290	3. Find your API key in your dashboard
+    291	4. The key will be a long alphanumeric string
+    292	
+    293	To test your TwelveData API key:
+    294	
+    295	```bash
+    296	# Test your TwelveData API key
+    297	curl -X POST https://localhost:7001/api/diagnostics/set-twelvedata-key \
+    298	  -H "Content-Type: application/json" \
+    299	  -d '{"apiKey": "your-twelvedata-key-here", "saveToUserSecrets": true}'
+    300	```
+    301	
+    302	Once configured, you can use TwelveData as your data provider:
+    303	
+    304	```bash
+    305	# Get EURUSD data using TwelveData
+    306	curl https://localhost:7001/api/forex/candles/EURUSD/Hours1/100/TwelveData
+    307	
+    308	# Analyze BTCUSD using TwelveData
+    309	curl https://localhost:7001/api/trading/analyze/BTCUSD/TwelveData
+    310	```
+    311	
+    312	### Running the Application
+    313	
+    314	1. Clone the repository
+    315	2. Navigate to the project directory
+    316	3. Build the solution:
+    317	   ```
+    318	   dotnet build
+    319	   ```
+    320	4. Run the API:
+    321	   ```
+    322	   cd src/Trader.Api
+    323	   dotnet run
+    324	   ```
+    325	5. Access the Swagger UI at `https://localhost:7001/swagger`
+    326	
+    327	## Using the TradingView Analysis Feature
+    328	
+    329	With the TradingView analysis feature, you can analyze chart patterns and get AI-powered trading recommendations for any forex pair or cryptocurrency. Here's how to use it:
+    330	
+    331	1. Ensure you have both API keys set up:
+    332	   - A market data API key (Polygon.io, TraderMade, or TwelveData) for fetching real market data
+    333	   - Perplexity API key (for AI analysis)
+    334	
+    335	2. Test your setup with the diagnostic endpoint:
+    336	   ```bash
+    337	   curl https://localhost:7001/api/diagnostics/config
+    338	   ```
+    339	   Confirm both API keys are configured.
+    340	
+    341	3. Get chart analysis for a symbol:
+    342	   ```bash
+    343	   curl https://localhost:7001/api/trading/analyze/BTCUSD
+    344	   ```
+    345	   This will return a detailed analysis with:
+    346	   - Current price
+    347	   - Buy/Sell recommendation
+    348	   - Stop loss level
+    349	   - Take profit level
+    350	   - Supporting factors for the recommendation
+    351	   - Market sentiment
+    352	   - Current market session information and liquidity
+    353	
+    354	4. Get multiple trading recommendations:
+    355	   ```bash
+    356	   curl https://localhost:7001/api/trading/recommendations?count=3
+    357	   ```
+    358	   This will return the top 3 trading opportunities across both forex and crypto.
+    359	
+    360	5. View raw chart data:
+    361	   ```bash
+    362	   # Get the last 50 candles on the 1-hour timeframe for BTCUSD
+    363	   curl https://localhost:7001/api/forex/candles/BTCUSD/Hours1/50
+    364	   ```
+    365	
+    366	### Example Trading Recommendation Response
+    367	
+    368	```json
+    369	{
+    370	  "currencyPair": "BTCUSD",
+    371	  "direction": "Buy",
+    372	  "sentiment": "Bullish",
+    373	  "confidence": 0.85,
+    374	  "currentPrice": 45120.50,
+    375	  "bestEntryPrice": 44850.00,
+    376	  "takeProfitPrice": 46500.00,
+    377	  "stopLossPrice": 44200.00,
+    378	  "orderType": "LimitBuy",
+    379	  "timeToBestEntry": "2-3 hours",
+    380	  "validUntil": "2025-03-11T12:34:56Z",
+    381	  "isSafeToEnterAtCurrentPrice": true,
+    382	  "currentEntryReason": "While the best entry is at 44850.00, entering at the current price of 45120.50 still provides a favorable risk-reward ratio of 1.4:1. Price is currently consolidating above key support at 45000 with strong momentum indicators.",
+    383	  "riskRewardRatio": 1.5,
+    384	  "factors": [
+    385	    "Price broke above key resistance at 45000",
+    386	    "Strong bullish momentum on 1h and 4h timeframes",
+    387	    "Support confluence at current levels"
+    388	  ],
+    389	  "rationale": "BTC is showing strong upside momentum after breaking the key psychological level of $45,000. Multiple timeframes align for a bullish continuation pattern.",
+    390	  "timestamp": "2025-03-10T12:34:56Z",
+    391	  "marketSession": {
+    392	    "currentSession": "NewYork",
+    393	    "description": "New York Session (North American markets) - 12:00-21:00 UTC - High liquidity, often volatile movements",
+    394	    "liquidityLevel": 4,
+    395	    "recommendedSession": "NewYork",
+    396	    "recommendationReason": "The New York session (12:00-21:00 UTC) offers strong liquidity for BTCUSD with US economic data releases often creating trading opportunities. Volatility can be high during this period.",
+    397	    "timeUntilNextSession": "5h 30m",
+    398	    "nextSession": "Asian",
+    399	    "currentTimeUtc": "2025-03-10T15:30:00Z",
+    400	    "nextSessionStartTimeUtc": "2025-03-10T23:00:00Z"
+    401	  },
+    402	  "sessionWarning": "Warning: Current market session (NewYork) is not optimal for trading BTCUSD. Consider waiting for the London session for better liquidity and trading conditions."
+    403	}
+    404	```
+    405	
+    406	## New Features
+    407	
+    408	### Order Types
+    409	
+    410	The analysis now includes an `orderType` field that specifies the recommended type of order to place:
+    411	
+    412	- **MarketBuy/MarketSell**: Execute the trade immediately at the current market price. Use when the current price is already at a good entry point.
+    413	  
+    414	- **LimitBuy/LimitSell**: Wait for the price to reach a better level before entering.
     41	
     42	## API Endpoints
     43	

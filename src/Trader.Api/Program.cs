@@ -87,6 +87,9 @@ public class Program
         // Register the position sizing service
         builder.Services.AddSingleton<IPositionSizingService, PositionSizingService>();
         
+        // Register the market movers service
+        builder.Services.AddSingleton<IMarketMoversService, MarketMoversService>();
+        
         // Register default data provider based on available API keys
         if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
         {
@@ -1196,6 +1199,180 @@ public class Program
                 });
             })
         .WithName("CheckConfiguration")
+        .WithOpenApi();
+
+        // Market Movers Endpoints
+        
+        // Get top forex market movers
+        app.MapGet("/api/market-movers/forex", async (
+            IMarketMoversService marketMoversService,
+            ILogger<Program> logger,
+            int count = 10,
+            string timeframe = "Hours1",
+            string provider = "TwelveData") =>
+        {
+            try
+            {
+                if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
+                {
+                    return Results.BadRequest($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
+                }
+                
+                if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
+                {
+                    return Results.BadRequest($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
+                }
+                
+                if (count <= 0 || count > 25)
+                {
+                    return Results.BadRequest("Count must be between 1 and 25");
+                }
+                
+                var marketMovers = await marketMoversService.GetTopForexMoversAsync(count, timeframeEnum, providerType);
+                return Results.Ok(marketMovers);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error getting top forex movers");
+                return Results.Problem($"Error getting top forex movers: {ex.Message}", statusCode: 500);
+            }
+        })
+        .WithName("GetTopForexMovers")
+        .WithOpenApi();
+        
+        // Get top crypto market movers
+        app.MapGet("/api/market-movers/crypto", async (
+            IMarketMoversService marketMoversService,
+            ILogger<Program> logger,
+            int count = 10,
+            string timeframe = "Hours1",
+            string provider = "TwelveData") =>
+        {
+            try
+            {
+                if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
+                {
+                    return Results.BadRequest($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
+                }
+                
+                if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
+                {
+                    return Results.BadRequest($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
+                }
+                
+                if (count <= 0 || count > 25)
+                {
+                    return Results.BadRequest("Count must be between 1 and 25");
+                }
+                
+                var marketMovers = await marketMoversService.GetTopCryptoMoversAsync(count, timeframeEnum, providerType);
+                return Results.Ok(marketMovers);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error getting top crypto movers");
+                return Results.Problem($"Error getting top crypto movers: {ex.Message}", statusCode: 500);
+            }
+        })
+        .WithName("GetTopCryptoMovers")
+        .WithOpenApi();
+        
+        // Get top forex market movers with EMA filters
+        app.MapGet("/api/market-movers/forex/ema-filtered", async (
+            IMarketMoversService marketMoversService,
+            ILogger<Program> logger,
+            int count = 10,
+            string shortTermTimeframe = "Hours1",
+            string longTermTimeframe = "Day1",
+            string provider = "TwelveData") =>
+        {
+            try
+            {
+                if (!Enum.TryParse<ChartTimeframe>(shortTermTimeframe, true, out var shortTermTimeframeEnum))
+                {
+                    return Results.BadRequest($"Invalid short-term timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
+                }
+                
+                if (!Enum.TryParse<ChartTimeframe>(longTermTimeframe, true, out var longTermTimeframeEnum))
+                {
+                    return Results.BadRequest($"Invalid long-term timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
+                }
+                
+                if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
+                {
+                    return Results.BadRequest($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
+                }
+                
+                if (count <= 0 || count > 25)
+                {
+                    return Results.BadRequest("Count must be between 1 and 25");
+                }
+                
+                // Get top forex movers
+                var marketMovers = await marketMoversService.GetTopForexMoversAsync(count, shortTermTimeframeEnum, providerType);
+                
+                // Apply EMA filters
+                var filteredMarketMovers = await marketMoversService.ApplyEmaFiltersAsync(
+                    marketMovers, shortTermTimeframeEnum, longTermTimeframeEnum, providerType);
+                
+                return Results.Ok(filteredMarketMovers);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error getting top forex movers with EMA filters");
+                return Results.Problem($"Error getting top forex movers with EMA filters: {ex.Message}", statusCode: 500);
+            }
+        })
+        .WithName("GetTopForexMoversWithEmaFilters")
+        .WithOpenApi();
+        
+        // Get top crypto market movers with EMA filters
+        app.MapGet("/api/market-movers/crypto/ema-filtered", async (
+            IMarketMoversService marketMoversService,
+            ILogger<Program> logger,
+            int count = 10,
+            string shortTermTimeframe = "Hours1",
+            string longTermTimeframe = "Day1",
+            string provider = "TwelveData") =>
+        {
+            try
+            {
+                if (!Enum.TryParse<ChartTimeframe>(shortTermTimeframe, true, out var shortTermTimeframeEnum))
+                {
+                    return Results.BadRequest($"Invalid short-term timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
+                }
+                
+                if (!Enum.TryParse<ChartTimeframe>(longTermTimeframe, true, out var longTermTimeframeEnum))
+                {
+                    return Results.BadRequest($"Invalid long-term timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
+                }
+                
+                if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
+                {
+                    return Results.BadRequest($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
+                }
+                
+                if (count <= 0 || count > 25)
+                {
+                    return Results.BadRequest("Count must be between 1 and 25");
+                }
+                
+                // Get top crypto movers
+                var marketMovers = await marketMoversService.GetTopCryptoMoversAsync(count, shortTermTimeframeEnum, providerType);
+                
+                // Apply EMA filters
+                var filteredMarketMovers = await marketMoversService.ApplyEmaFiltersAsync(
+                    marketMovers, shortTermTimeframeEnum, longTermTimeframeEnum, providerType);
+                
+                return Results.Ok(filteredMarketMovers);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error getting top crypto movers with EMA filters");
+                return Results.Problem($"Error getting top crypto movers with EMA filters: {ex.Message}", statusCode: 500);
+            }
+        })
+        .WithName("GetTopCryptoMoversWithEmaFilters")
         .WithOpenApi();
 
         app.Run();
