@@ -18,6 +18,13 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     private readonly string _perplexityApiKey;
     private readonly ILogger<TradingViewAnalyzer> _logger;
     private readonly ForexMarketSessionService _marketSessionService;
+    
+    // Cache for recent analysis results to ensure consistency between endpoints
+    private readonly Dictionary<string, (SentimentAnalysisResult Result, DateTime Timestamp)> _analysisCache = 
+        new Dictionary<string, (SentimentAnalysisResult, DateTime)>(StringComparer.OrdinalIgnoreCase);
+    
+    // Cache expiration time (5 minutes)
+    private readonly TimeSpan _cacheExpiration = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Constructor for TradingViewAnalyzer
@@ -104,6 +111,21 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         try
         {
             _logger.LogInformation("Analyzing sentiment for {Symbol}", symbol);
+            
+            // Check if we have a recent cached result
+            if (_analysisCache.TryGetValue(symbol, out var cachedResult))
+            {
+                if (DateTime.UtcNow - cachedResult.Timestamp < _cacheExpiration)
+                {
+                    _logger.LogInformation("Using cached analysis result for {Symbol} from {Timestamp}", 
+                        symbol, cachedResult.Timestamp);
+                    return cachedResult.Result;
+                }
+                else
+                {
+                    _logger.LogInformation("Cached analysis for {Symbol} expired, performing new analysis", symbol);
+                }
+            }
             
             // Check if we're using TraderMade provider to adjust candle counts
             bool isTraderMade = _dataProvider is TraderMadeDataProvider;
@@ -246,6 +268,9 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                         }
                     }
                     
+                    // Store the result in the cache
+                    _analysisCache[symbol] = (result, DateTime.UtcNow);
+                    
                     _logger.LogInformation(
                         "Analysis for {Symbol}: {Sentiment} ({Confidence:P0}), Trade: {Trade}, Current Session: {Session} (Liquidity: {Liquidity}/5)",
                         symbol,
@@ -319,155 +344,15 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                 {
                     _logger.LogInformation("Analyzing {Pair} for trading recommendation", pair);
                     
-                    // Fetch candle data for multiple timeframes - focusing on higher timeframes
-                    var candles1h = await _dataProvider.GetCandleDataAsync(pair, ChartTimeframe.Hours1, 24);
-                    var candles4h = await _dataProvider.GetCandleDataAsync(pair, ChartTimeframe.Hours4, 12);
-                    var candles1d = await _dataProvider.GetCandleDataAsync(pair, ChartTimeframe.Day1, 10);
-                    
-                    _logger.LogInformation("Retrieved {H1Count} 1h candles, {H4Count} 4h candles, {D1Count} daily candles for {Pair}", 
-                        candles1h.Count, candles4h.Count, candles1d.Count, pair);
-                    
-                    // Generate the prompt for the recommendation with empty 5m data
-                    var prompt = GenerateRecommendationPrompt(pair, new List<CandleData>(), candles1h, candles4h, candles1d);
-                    
-                    // Send the prompt to Perplexity AI
-                    var requestBody = new
+                    // Check if we have a recent analysis for this pair and use it instead of doing a new analysis
+                    if (_analysisCache.TryGetValue(pair, out var cachedResult) && 
+                        DateTime.UtcNow - cachedResult.Timestamp < _cacheExpiration)
                     {
-                        model = "sonar-pro",
-                        messages = new[]
-                        {
-                            new { role = "system", content = "You are an expert trading analyst specializing in technical analysis and market sentiment. Focus on higher timeframes (daily, 4-hour, and 1-hour) for more reliable signals and to filter out market noise. Only recommend trades with clear setups and good risk-reward ratios. If you don't see a strong trading opportunity, clearly state that no trade is recommended at this time. Be precise with price levels and never make up information. Prioritize longer-term trends over short-term fluctuations." },
-                            new { role = "user", content = prompt }
-                        },
-                        temperature = 0.1,
-                        max_tokens = 1000
-                    };
-                    
-                    var content = new StringContent(
-                        JsonSerializer.Serialize(requestBody),
-                        Encoding.UTF8,
-                        "application/json");
+                        _logger.LogInformation("Using cached analysis for {Pair} from {Timestamp}", 
+                            pair, cachedResult.Timestamp);
                         
-                    var request = new HttpRequestMessage(HttpMethod.Post, "chat/completions")
-                    {
-                        Content = content
-                    };
-                    
-                    request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _perplexityApiKey);
-                    
-                    _logger.LogInformation("Sending request to Perplexity API for {Pair}", pair);
-                    
-                    var response = await _httpClient.SendAsync(request);
-                    
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        var errorContent = await response.Content.ReadAsStringAsync();
-                        _logger.LogError("Perplexity API returned error for {Pair}: {StatusCode} - {Error}", 
-                            pair, response.StatusCode, errorContent);
-                        continue;
-                    }
-                    
-                    var responseString = await response.Content.ReadAsStringAsync();
-                    _logger.LogInformation("Received response from Perplexity API for {Pair} ({Length} chars)", 
-                        pair, responseString.Length);
-                    
-                    var responseObject = JsonSerializer.Deserialize<PerplexityResponse>(responseString);
-                    
-                    if (responseObject?.choices == null || responseObject.choices.Length == 0)
-                    {
-                        _logger.LogWarning("No choices in Perplexity API response for {Pair}", pair);
-                        continue;
-                    }
-                    
-                    // Extract the JSON from the response text
-                    var responseContent = responseObject.choices[0].message.content;
-                    var jsonStartIndex = responseContent.IndexOf('{');
-                    var jsonEndIndex = responseContent.LastIndexOf('}');
-                    
-                    if (jsonStartIndex < 0 || jsonEndIndex <= jsonStartIndex)
-                    {
-                        _logger.LogWarning("Could not extract JSON from Perplexity API response for {Pair}. Content: {Content}", 
-                            pair, responseContent.Length > 100 ? responseContent.Substring(0, 100) + "..." : responseContent);
-                        continue;
-                    }
-                    
-                    var jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
-                    
-                    try
-                    {
-                        var recommendationData = JsonSerializer.Deserialize<RecommendationData>(jsonContent);
-                        
-                        if (recommendationData == null)
-                        {
-                            _logger.LogWarning("Failed to deserialize recommendation data for {Pair}", pair);
-                            continue;
-                        }
-                        
-                        // Even if there's no clear direction, we'll still create a recommendation
-                        // but mark it with lower confidence
-                        bool hasUnclearDirection = string.IsNullOrEmpty(recommendationData.direction) || 
-                            recommendationData.direction.Equals("None", StringComparison.OrdinalIgnoreCase) ||
-                            recommendationData.direction.Equals("Neutral", StringComparison.OrdinalIgnoreCase);
-                            
-                        if (hasUnclearDirection)
-                        {
-                            _logger.LogInformation("No clear direction in recommendation for {Pair}, but will include with lower confidence", pair);
-                            // Set a default direction based on recent price action
-                            recommendationData.direction = "Neutral";
-                            // Lower the confidence for unclear recommendations
-                            recommendationData.confidence = Math.Min(recommendationData.confidence, 0.4m);
-                        }
-                        
-                        // Get market session information
-                        var sessionInfo = _marketSessionService.GetCurrentSessionInfo(pair);
-                        
-                        // Create the recommendation
-                        var recommendation = new ForexRecommendation
-                        {
-                            CurrencyPair = pair,
-                            Direction = recommendationData.direction,
-                            Sentiment = ParseSentiment(recommendationData.sentiment),
-                            Confidence = recommendationData.confidence,
-                            CurrentPrice = recommendationData.currentPrice,
-                            TakeProfitPrice = recommendationData.takeProfitPrice,
-                            StopLossPrice = recommendationData.stopLossPrice,
-                            BestEntryPrice = recommendationData.bestEntryPrice > 0 ? recommendationData.bestEntryPrice : recommendationData.currentPrice,
-                            OrderType = ParseOrderType(recommendationData.orderType, recommendationData.direction, recommendationData.currentPrice, recommendationData.bestEntryPrice),
-                            TimeToBestEntry = !string.IsNullOrEmpty(recommendationData.timeToBestEntry) ? recommendationData.timeToBestEntry : "Unknown",
-                            ValidUntil = ParseValidityPeriod(recommendationData.validityPeriod),
-                            IsSafeToEnterAtCurrentPrice = recommendationData.isSafeToEnterAtCurrentPrice,
-                            CurrentEntryReason = recommendationData.currentEntryReason,
-                            Factors = recommendationData.factors ?? new List<string>(),
-                            Rationale = recommendationData.rationale,
-                            Timestamp = DateTime.UtcNow,
-                            MarketSession = new MarketSessionInfo
-                            {
-                                CurrentSession = sessionInfo.CurrentSession.ToString(),
-                                Description = sessionInfo.Description,
-                                LiquidityLevel = sessionInfo.LiquidityLevel,
-                                RecommendedSession = sessionInfo.RecommendedSession.ToString(),
-                                RecommendationReason = sessionInfo.RecommendationReason,
-                                TimeUntilNextSession = FormatTimeSpan(sessionInfo.TimeUntilNextSession),
-                                NextSession = sessionInfo.NextSession.ToString(),
-                                CurrentTimeUtc = sessionInfo.CurrentTimeUtc,
-                                NextSessionStartTimeUtc = sessionInfo.NextSessionStartTimeUtc
-                            }
-                        };
-                        
-                        // Add session warning if current session is not the recommended one
-                        if (sessionInfo.CurrentSession != sessionInfo.RecommendedSession)
-                        {
-                            // Check if this is a cryptocurrency pair
-                            bool isCrypto = IsCryptoPair(pair);
-                            
-                            // Only add session warning for forex pairs, not for cryptocurrencies
-                            if (!isCrypto)
-                            {
-                                recommendation.SessionWarning = $"Warning: Current market session ({sessionInfo.CurrentSession}) is not optimal for trading {pair}. Consider waiting for the {sessionInfo.RecommendedSession} session for better liquidity and trading conditions.";
-                                _logger.LogInformation("Session warning added for {Symbol}: Current session {CurrentSession} is not the recommended {RecommendedSession}", 
-                                    pair, sessionInfo.CurrentSession, sessionInfo.RecommendedSession);
-                            }
-                        }
+                        // Convert the sentiment analysis to a recommendation
+                        var recommendation = ConvertAnalysisToRecommendation(cachedResult.Result);
                         
                         // Add to all recommendations list regardless of R:R ratio
                         allRecommendations.Add(recommendation);
@@ -478,28 +363,58 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                             goodRecommendations.Add(recommendation);
                             
                             _logger.LogInformation(
-                                "Added good recommendation for {Symbol}: {Direction} at {Price}, R:R {RiskReward}, Session: {Session} (Liquidity: {Liquidity}/5)",
+                                "Added good recommendation from cache for {Symbol}: {Direction} at {Price}, R:R {RiskReward}, Sentiment: {Sentiment}",
                                 recommendation.CurrencyPair,
                                 recommendation.Direction,
                                 recommendation.CurrentPrice,
                                 recommendation.RiskRewardRatio,
-                                recommendation.MarketSession.CurrentSession,
-                                recommendation.MarketSession.LiquidityLevel);
+                                recommendation.Sentiment);
                         }
                         else
                         {
                             _logger.LogInformation(
-                                "Added recommendation with low R:R for {Symbol}: {Direction} at {Price}, R:R {RiskReward}",
+                                "Added recommendation with low R:R from cache for {Symbol}: {Direction} at {Price}, R:R {RiskReward}, Sentiment: {Sentiment}",
                                 recommendation.CurrencyPair,
                                 recommendation.Direction,
                                 recommendation.CurrentPrice,
-                                recommendation.RiskRewardRatio);
+                                recommendation.RiskRewardRatio,
+                                recommendation.Sentiment);
                         }
+                        
+                        continue; // Skip to the next pair
                     }
-                    catch (JsonException ex)
+                    
+                    // If no cached result, perform a full analysis
+                    SentimentAnalysisResult analysisResult = await AnalyzeSentimentAsync(pair);
+                    
+                    // Convert the sentiment analysis to a recommendation
+                    var newRecommendation = ConvertAnalysisToRecommendation(analysisResult);
+                    
+                    // Add to all recommendations list regardless of R:R ratio
+                    allRecommendations.Add(newRecommendation);
+                    
+                    // Only add to good recommendations if the risk-reward ratio is reasonable (at least 1.5)
+                    if (newRecommendation.RiskRewardRatio >= 1.5m)
                     {
-                        _logger.LogError(ex, "Error deserializing recommendation data for {Pair}. JSON: {Json}", 
-                            pair, jsonContent.Length > 100 ? jsonContent.Substring(0, 100) + "..." : jsonContent);
+                        goodRecommendations.Add(newRecommendation);
+                        
+                        _logger.LogInformation(
+                            "Added good recommendation for {Symbol}: {Direction} at {Price}, R:R {RiskReward}, Sentiment: {Sentiment}",
+                            newRecommendation.CurrencyPair,
+                            newRecommendation.Direction,
+                            newRecommendation.CurrentPrice,
+                            newRecommendation.RiskRewardRatio,
+                            newRecommendation.Sentiment);
+                    }
+                    else
+                    {
+                        _logger.LogInformation(
+                            "Added recommendation with low R:R for {Symbol}: {Direction} at {Price}, R:R {RiskReward}, Sentiment: {Sentiment}",
+                            newRecommendation.CurrencyPair,
+                            newRecommendation.Direction,
+                            newRecommendation.CurrentPrice,
+                            newRecommendation.RiskRewardRatio,
+                            newRecommendation.Sentiment);
                     }
                 }
                 catch (Exception ex)
@@ -1117,6 +1032,44 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         }
         
         return false;
+    }
+    
+    /// <summary>
+    /// Converts a SentimentAnalysisResult to a ForexRecommendation
+    /// </summary>
+    private ForexRecommendation ConvertAnalysisToRecommendation(SentimentAnalysisResult analysis)
+    {
+        // Ensure we're correctly mapping the sentiment and direction
+        var direction = analysis.TradeRecommendation;
+        
+        // Log the conversion to help with debugging
+        _logger.LogInformation(
+            "Converting analysis to recommendation for {Symbol}: Sentiment={Sentiment}, TradeRecommendation={TradeRecommendation}",
+            analysis.CurrencyPair,
+            analysis.Sentiment,
+            analysis.TradeRecommendation);
+        
+        return new ForexRecommendation
+        {
+            CurrencyPair = analysis.CurrencyPair,
+            Direction = direction,
+            Sentiment = analysis.Sentiment,
+            Confidence = analysis.Confidence,
+            CurrentPrice = analysis.CurrentPrice,
+            TakeProfitPrice = analysis.TakeProfitPrice,
+            StopLossPrice = analysis.StopLossPrice,
+            BestEntryPrice = analysis.BestEntryPrice,
+            OrderType = analysis.OrderType,
+            TimeToBestEntry = analysis.TimeToBestEntry,
+            ValidUntil = analysis.ValidUntil,
+            IsSafeToEnterAtCurrentPrice = analysis.IsSafeToEnterAtCurrentPrice,
+            CurrentEntryReason = analysis.CurrentEntryReason,
+            Factors = analysis.Factors,
+            Rationale = analysis.Summary,
+            Timestamp = DateTime.UtcNow,
+            MarketSession = analysis.MarketSession,
+            SessionWarning = analysis.SessionWarning
+        };
     }
     
     #region API Response Classes
