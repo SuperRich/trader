@@ -26,13 +26,6 @@ public class TraderMadeKeyRequest
     public bool SaveToUserSecrets { get; set; } = false;
 }
 
-// Request model for TwelveData API key
-public class TwelveDataKeyRequest
-{
-    public string ApiKey { get; set; } = string.Empty;
-    public bool SaveToUserSecrets { get; set; } = false;
-}
-
 // Extension method to add in-memory configuration
 public static class ConfigurationExtensions
 {
@@ -76,7 +69,6 @@ public class Program
         builder.Services.AddSingleton<ForexDataProvider>();
         builder.Services.AddHttpClient<PolygonDataProvider>();
         builder.Services.AddHttpClient<TraderMadeDataProvider>();
-        builder.Services.AddHttpClient<TwelveDataProvider>();
         
         // Register the data provider factory
         builder.Services.AddSingleton<IForexDataProviderFactory, ForexDataProviderFactory>();
@@ -97,11 +89,6 @@ public class Program
         {
             builder.Services.AddHttpClient<IForexDataProvider, TraderMadeDataProvider>();
             Console.WriteLine("Using TraderMade as default data provider");
-        }
-        else if (!string.IsNullOrEmpty(builder.Configuration["TwelveData:ApiKey"]))
-        {
-            builder.Services.AddHttpClient<IForexDataProvider, TwelveDataProvider>();
-            Console.WriteLine("Using TwelveData as default data provider");
         }
         else
         {
@@ -985,167 +972,6 @@ public class Program
                 }
             });
         
-        // Endpoint to set TwelveData API key
-        app.MapPost("/api/diagnostics/set-twelvedata-key", 
-            async (TwelveDataKeyRequest request, IConfiguration configuration, ILogger<Program> logger) =>
-            {
-                if (string.IsNullOrEmpty(request.ApiKey))
-                {
-                    return Results.BadRequest("API key cannot be empty");
-                }
-                
-                try
-                {
-                    // Test if the key is valid by making a simple API call
-                    var httpClient = new HttpClient();
-                    var testUrl = $"https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=1day&outputsize=5&apikey={request.ApiKey}";
-                    
-                    logger.LogInformation("Testing TwelveData API with key starting with {KeyPrefix}", 
-                        request.ApiKey.Length > 4 ? request.ApiKey[..4] + "..." : "too short");
-                    
-                    var response = await httpClient.GetAsync(testUrl);
-                    var responseContent = await response.Content.ReadAsStringAsync();
-                    
-                    logger.LogInformation("TwelveData API response: Status: {Status}, Content: {Content}", 
-                        response.StatusCode, responseContent);
-                        
-                    var isValid = response.IsSuccessStatusCode;
-                    var statusMessage = isValid 
-                        ? "Valid API key" 
-                        : $"Invalid API key: {response.StatusCode}. Response: {responseContent}";
-                    
-                    // Only save the key if it's valid and user wants to save
-                    if (isValid && request.SaveToUserSecrets)
-                    {
-                        try
-                        {
-                            // Save to user secrets
-                            var userSecretsId = "trader-app-secrets-id";
-                            var userSecretsPath = Path.Combine(
-                                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                                "Microsoft", "UserSecrets", userSecretsId);
-                                
-                            Directory.CreateDirectory(userSecretsPath);
-                            
-                            var secretsFilePath = Path.Combine(userSecretsPath, "secrets.json");
-                            
-                            // Read existing secrets if they exist
-                            Dictionary<string, string> secrets;
-                            if (File.Exists(secretsFilePath))
-                            {
-                                var existingJson = await File.ReadAllTextAsync(secretsFilePath);
-                                secrets = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(existingJson) 
-                                    ?? new Dictionary<string, string>();
-                            }
-                            else
-                            {
-                                secrets = new Dictionary<string, string>();
-                            }
-                            
-                            // Add/update the TwelveData API key
-                            secrets["TwelveData:ApiKey"] = request.ApiKey;
-                            
-                            await File.WriteAllTextAsync(
-                                secretsFilePath, 
-                                System.Text.Json.JsonSerializer.Serialize(secrets, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-                                
-                            logger.LogInformation("Saved valid TwelveData API key to user secrets at {Path}", secretsFilePath);
-                            
-                            // Also create a .env file entry
-                            var envFilePath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
-                            string envContent = "";
-                            
-                            if (File.Exists(envFilePath))
-                            {
-                                envContent = await File.ReadAllTextAsync(envFilePath);
-                            }
-                            
-                            // Update or add the TwelveData API key
-                            var envVarName = "TRADER_TWELVEDATA_API_KEY";
-                            if (envContent.Contains(envVarName))
-                            {
-                                // Replace existing line
-                                var lines = envContent.Split('\n');
-                                for (int i = 0; i < lines.Length; i++)
-                                {
-                                    if (lines[i].StartsWith(envVarName))
-                                    {
-                                        lines[i] = $"{envVarName}={request.ApiKey}";
-                                        break;
-                                    }
-                                }
-                                envContent = string.Join('\n', lines);
-                            }
-                            else
-                            {
-                                // Add new line
-                                if (!string.IsNullOrEmpty(envContent) && !envContent.EndsWith('\n'))
-                                {
-                                    envContent += '\n';
-                                }
-                                envContent += $"{envVarName}={request.ApiKey}\n";
-                            }
-                            
-                            await File.WriteAllTextAsync(envFilePath, envContent);
-                            logger.LogInformation("Also saved TwelveData API key to .env file at {Path}", envFilePath);
-                            
-                            // Update appsettings.Development.json if it exists
-                            var appSettingsDevPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.Development.json");
-                            if (File.Exists(appSettingsDevPath))
-                            {
-                                try
-                                {
-                                    var json = await File.ReadAllTextAsync(appSettingsDevPath);
-                                    
-                                    // Check if TwelveData section exists
-                                    if (json.Contains("\"TwelveData\": {"))
-                                    {
-                                        var updated = System.Text.RegularExpressions.Regex.Replace(
-                                            json,
-                                            "\"ApiKey\":\\s*\"[^\"]*\"",
-                                            $"\"ApiKey\": \"{request.ApiKey}\"");
-                                            
-                                        await File.WriteAllTextAsync(appSettingsDevPath, updated);
-                                    }
-                                    else
-                                    {
-                                        // Insert TwelveData section before the closing brace
-                                        var lastBrace = json.LastIndexOf('}');
-                                        if (lastBrace > 0)
-                                        {
-                                            var updated = json.Insert(lastBrace, $",\n  \"TwelveData\": {{\n    \"ApiKey\": \"{request.ApiKey}\"\n  }}\n");
-                                            await File.WriteAllTextAsync(appSettingsDevPath, updated);
-                                        }
-                                    }
-                                    
-                                    logger.LogInformation("Updated TwelveData API key in {Path}", appSettingsDevPath);
-                                }
-                                catch (Exception ex)
-                                {
-                                    logger.LogWarning(ex, "Failed to update appsettings.Development.json");
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogWarning(ex, "Failed to save TwelveData API key to some locations");
-                        }
-                    }
-                    
-                    return Results.Ok(new 
-                    { 
-                        IsValid = isValid,
-                        StatusMessage = statusMessage,
-                        SavedToUserSecrets = isValid && request.SaveToUserSecrets
-                    });
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "Error testing TwelveData API key");
-                    return Results.Problem($"Error testing API key: {ex.Message}");
-                }
-            });
-        
         // Diagnostic endpoint to check configuration
         app.MapGet("/api/diagnostics/config", 
             (IConfiguration configuration, ILogger<Program> logger) =>
@@ -1153,24 +979,21 @@ public class Program
                 var perplexityApiKey = configuration["Perplexity:ApiKey"] ?? configuration["TRADER_PERPLEXITY_API_KEY"];
                 var polygonApiKey = configuration["Polygon:ApiKey"] ?? configuration["TRADER_POLYGON_API_KEY"];
                 var tradermadeApiKey = configuration["TraderMade:ApiKey"] ?? configuration["TRADER_TRADERMADE_API_KEY"];
-                var twelvedataApiKey = configuration["TwelveData:ApiKey"] ?? configuration["TRADER_TWELVEDATA_API_KEY"];
                 
                 var hasPerplexity = !string.IsNullOrEmpty(perplexityApiKey);
                 var hasPolygon = !string.IsNullOrEmpty(polygonApiKey);
                 var hasTraderMade = !string.IsNullOrEmpty(tradermadeApiKey);
-                var hasTwelveData = !string.IsNullOrEmpty(twelvedataApiKey);
                 
-                logger.LogInformation("Configuration check: Perplexity API key: {HasKey}, Polygon API key: {HasPolygon}, TraderMade API key: {HasTraderMade}, TwelveData API key: {HasTwelveData}",
-                    hasPerplexity, hasPolygon, hasTraderMade, hasTwelveData);
+                logger.LogInformation("Configuration check: Perplexity API key: {HasKey}, Polygon API key: {HasPolygon}, TraderMade API key: {HasTraderMade}",
+                    hasPerplexity, hasPolygon, hasTraderMade);
                 
-                var defaultProvider = hasPolygon ? "Polygon" : hasTraderMade ? "TraderMade" : hasTwelveData ? "TwelveData" : "Mock";
+                var defaultProvider = hasPolygon ? "Polygon" : hasTraderMade ? "TraderMade" : "Mock";
                 
                 return Results.Ok(new
                 {
                     HasPerplexityApiKey = hasPerplexity,
                     HasPolygonApiKey = hasPolygon,
                     HasTraderMadeApiKey = hasTraderMade,
-                    HasTwelveDataApiKey = hasTwelveData,
                     DefaultDataProvider = defaultProvider,
                     PerplexityKeyPrefix = hasPerplexity && !string.IsNullOrEmpty(perplexityApiKey) && perplexityApiKey.Length > 4 
                         ? perplexityApiKey.Substring(0, 4) + "..." 
@@ -1180,9 +1003,6 @@ public class Program
                         : null,
                     TraderMadeKeyPrefix = hasTraderMade && !string.IsNullOrEmpty(tradermadeApiKey) && tradermadeApiKey.Length > 4 
                         ? tradermadeApiKey.Substring(0, 4) + "..." 
-                        : null,
-                    TwelveDataKeyPrefix = hasTwelveData && !string.IsNullOrEmpty(twelvedataApiKey) && twelvedataApiKey.Length > 4 
-                        ? twelvedataApiKey.Substring(0, 4) + "..." 
                         : null
                 });
             })

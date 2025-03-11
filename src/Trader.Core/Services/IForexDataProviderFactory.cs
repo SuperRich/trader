@@ -31,5 +31,10 @@ public enum DataProviderType
     /// <summary>
     /// TraderMade data provider for real market data.
     /// </summary>
-    TraderMade
-} 
+    TraderMade,
+    
+    /// <summary>
+    /// TwelveData data provider for real market data.
+    /// </summary>
+    TwelveData
+}

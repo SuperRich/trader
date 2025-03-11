@@ -27,8 +27,9 @@ public class ForexDataProviderFactory : IForexDataProviderFactory
         {
             DataProviderType.Polygon => _serviceProvider.GetRequiredService<PolygonDataProvider>(),
             DataProviderType.TraderMade => _serviceProvider.GetRequiredService<TraderMadeDataProvider>(),
+            DataProviderType.TwelveData => _serviceProvider.GetRequiredService<TwelveDataProvider>(),
             DataProviderType.Mock => _serviceProvider.GetRequiredService<ForexDataProvider>(),
             _ => throw new ArgumentException($"Unsupported provider type: {providerType}")
         };
     }
-} 
+}
