@@ -62,14 +62,17 @@ namespace Trader.Infrastructure.Services
             decimal currentPrice, 
             decimal accountBalance = 201m, 
             decimal leverage = 1000m,
-            decimal[]? targetProfits = null)
+            decimal[]? targetProfits = null,
+            string? tradeDirection = null,
+            decimal? stopLossPrice = null,
+            decimal? takeProfitPrice = null)
         {
-            _logger.LogInformation($"Calculating position sizing for {symbol} at price {currentPrice}");
+            _logger.LogInformation($"Calculating position sizing for {symbol} at price {currentPrice}, direction: {tradeDirection ?? "Not specified"}");
             
             // Default target profits if none provided
             if (targetProfits == null || targetProfits.Length == 0)
             {
-                targetProfits = new[] { 50m, 100m, 200m, 500m, 1000m };
+                targetProfits = new[] { 1m, 2m, 3m, 5m, 10m };
             }
             
             var result = new PositionSizingInfo
@@ -90,6 +93,13 @@ namespace Trader.Infrastructure.Services
             // Calculate maximum position size with full leverage
             result.MaxPositionSize = accountBalance * leverage;
             result.MaxLotSize = Math.Round(result.MaxPositionSize / standardLotSize, 2);
+            
+            // Determine if this is a buy or sell trade
+            bool isBuyTrade = true; // Default to buy
+            if (!string.IsNullOrEmpty(tradeDirection))
+            {
+                isBuyTrade = tradeDirection.Equals("Buy", StringComparison.OrdinalIgnoreCase);
+            }
             
             // Calculate for each target profit
             foreach (var targetProfit in targetProfits)
@@ -156,30 +166,87 @@ namespace Trader.Infrastructure.Services
                 decimal riskAmount = targetProfit;
                 decimal riskPercentage = Math.Round((riskAmount / accountBalance) * 100, 2);
                 
-                // Calculate price levels based on a 2:1 risk-reward ratio
-                decimal baseStopLoss = isCrypto ? 0.02m : pipValue * 30; // 2% for crypto, 30 pips for forex
-                decimal stopLossDistance = Math.Max(baseStopLoss, priceMovementRequired / 2); // Scale SL with target
+                // Use provided stop loss and take profit if available
+                decimal finalStopLossPrice, finalTakeProfitPrice, invalidationPrice;
+                decimal finalRiskRewardRatio;
                 
-                // Calculate SL and TP prices based on direction
-                decimal stopLossPrice, takeProfitPrice, invalidationPrice;
-                
-                if (isCrypto)
+                if (stopLossPrice.HasValue && takeProfitPrice.HasValue)
                 {
-                    // For crypto, round to 2 decimal places
-                    stopLossPrice = Math.Round(currentPrice * (1 - stopLossDistance), 2);
-                    takeProfitPrice = Math.Round(currentPrice * (1 + (stopLossDistance * 2)), 2); // 2:1 ratio
-                    invalidationPrice = Math.Round(stopLossPrice * (1 - 0.01m), 2); // 1% below SL
+                    // Use the provided values
+                    finalStopLossPrice = stopLossPrice.Value;
+                    finalTakeProfitPrice = takeProfitPrice.Value;
+                    
+                    // Calculate invalidation price based on direction
+                    if (isBuyTrade)
+                    {
+                        // For buy trades, invalidation is below stop loss
+                        invalidationPrice = Math.Round(finalStopLossPrice * (1 - (isCrypto ? 0.01m : pipValue)), isCrypto ? 2 : 5);
+                    }
+                    else
+                    {
+                        // For sell trades, invalidation is above stop loss
+                        invalidationPrice = Math.Round(finalStopLossPrice * (1 + (isCrypto ? 0.01m : pipValue)), isCrypto ? 2 : 5);
+                    }
+                    
+                    // Calculate actual risk-reward ratio based on direction
+                    if (isBuyTrade)
+                    {
+                        finalRiskRewardRatio = Math.Round((finalTakeProfitPrice - currentPrice) / (currentPrice - finalStopLossPrice), 2);
+                    }
+                    else
+                    {
+                        finalRiskRewardRatio = Math.Round((currentPrice - finalTakeProfitPrice) / (finalStopLossPrice - currentPrice), 2);
+                    }
                 }
                 else
                 {
-                    // For forex, round to 5 decimal places
-                    stopLossPrice = Math.Round(currentPrice * (1 - stopLossDistance), 5);
-                    takeProfitPrice = Math.Round(currentPrice * (1 + (stopLossDistance * 2)), 5); // 2:1 ratio
-                    invalidationPrice = Math.Round(stopLossPrice * (1 - pipValue), 5); // 1 pip below SL
+                    // Calculate price levels based on a 2:1 risk-reward ratio
+                    decimal baseStopLoss = isCrypto ? 0.02m : pipValue * 30; // 2% for crypto, 30 pips for forex
+                    decimal stopLossDistance = Math.Max(baseStopLoss, priceMovementRequired / 2); // Scale SL with target
+                    
+                    if (isBuyTrade)
+                    {
+                        // For buy trades (long position)
+                        if (isCrypto)
+                        {
+                            // For crypto, round to 2 decimal places
+                            finalStopLossPrice = Math.Round(currentPrice * (1 - stopLossDistance), 2);
+                            finalTakeProfitPrice = Math.Round(currentPrice * (1 + (stopLossDistance * 2)), 2); // 2:1 ratio
+                            invalidationPrice = Math.Round(finalStopLossPrice * (1 - 0.01m), 2); // 1% below SL
+                        }
+                        else
+                        {
+                            // For forex, round to 5 decimal places
+                            finalStopLossPrice = Math.Round(currentPrice * (1 - stopLossDistance), 5);
+                            finalTakeProfitPrice = Math.Round(currentPrice * (1 + (stopLossDistance * 2)), 5); // 2:1 ratio
+                            invalidationPrice = Math.Round(finalStopLossPrice * (1 - pipValue), 5); // 1 pip below SL
+                        }
+                        
+                        // Calculate actual risk-reward ratio
+                        finalRiskRewardRatio = Math.Round((finalTakeProfitPrice - currentPrice) / (currentPrice - finalStopLossPrice), 2);
+                    }
+                    else
+                    {
+                        // For sell trades (short position)
+                        if (isCrypto)
+                        {
+                            // For crypto, round to 2 decimal places
+                            finalStopLossPrice = Math.Round(currentPrice * (1 + stopLossDistance), 2);
+                            finalTakeProfitPrice = Math.Round(currentPrice * (1 - (stopLossDistance * 2)), 2); // 2:1 ratio
+                            invalidationPrice = Math.Round(finalStopLossPrice * (1 + 0.01m), 2); // 1% above SL
+                        }
+                        else
+                        {
+                            // For forex, round to 5 decimal places
+                            finalStopLossPrice = Math.Round(currentPrice * (1 + stopLossDistance), 5);
+                            finalTakeProfitPrice = Math.Round(currentPrice * (1 - (stopLossDistance * 2)), 5); // 2:1 ratio
+                            invalidationPrice = Math.Round(finalStopLossPrice * (1 + pipValue), 5); // 1 pip above SL
+                        }
+                        
+                        // Calculate actual risk-reward ratio
+                        finalRiskRewardRatio = Math.Round((currentPrice - finalTakeProfitPrice) / (finalStopLossPrice - currentPrice), 2);
+                    }
                 }
-                
-                // Calculate actual risk-reward ratio
-                decimal riskRewardRatio = Math.Round((takeProfitPrice - currentPrice) / (currentPrice - stopLossPrice), 2);
                 
                 result.ProfitTargets[targetProfit] = new PositionSizingTarget
                 {
@@ -190,10 +257,10 @@ namespace Trader.Infrastructure.Services
                     PriceMovementPercent = Math.Round(priceMovementPercent * 100, 2), // Convert to percentage
                     RiskAmount = riskAmount,
                     RiskPercentage = riskPercentage,
-                    StopLossPrice = stopLossPrice,
-                    TakeProfitPrice = takeProfitPrice,
+                    StopLossPrice = finalStopLossPrice,
+                    TakeProfitPrice = finalTakeProfitPrice,
                     InvalidationPrice = invalidationPrice,
-                    RiskRewardRatio = riskRewardRatio
+                    RiskRewardRatio = finalRiskRewardRatio
                 };
             }
             

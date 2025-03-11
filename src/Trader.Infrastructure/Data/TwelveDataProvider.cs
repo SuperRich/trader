@@ -175,7 +175,7 @@ public class TwelveDataProvider : IForexDataProvider
     /// </summary>
     private class TwelveDataResponse
     {
-        public string? meta { get; set; }
+        public JsonElement meta { get; set; }
         public TwelveDataValue[]? values { get; set; }
         public string? status { get; set; }
     }

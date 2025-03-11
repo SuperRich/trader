@@ -277,7 +277,10 @@ public class Program
                             analysis.CurrentPrice,
                             accountBalance ?? 201m,
                             leverage ?? 1000m,
-                            profitTargets);
+                            profitTargets,
+                            analysis.TradeRecommendation,
+                            analysis.StopLossPrice > 0 ? analysis.StopLossPrice : null,
+                            analysis.TakeProfitPrice > 0 ? analysis.TakeProfitPrice : null);
                         
                         logger.LogInformation("Added position sizing calculations for {Symbol} with balance {Balance} and leverage {Leverage}", 
                             symbol, accountBalance ?? 201m, leverage ?? 1000m);
@@ -387,7 +390,10 @@ public class Program
                             analysis.CurrentPrice,
                             accountBalance ?? 201m,
                             leverage ?? 1000m,
-                            profitTargets);
+                            profitTargets,
+                            analysis.TradeRecommendation,
+                            analysis.StopLossPrice > 0 ? analysis.StopLossPrice : null,
+                            analysis.TakeProfitPrice > 0 ? analysis.TakeProfitPrice : null);
                         
                         logger.LogInformation("Added position sizing calculations for {Symbol} with balance {Balance} and leverage {Leverage}", 
                             symbol, accountBalance ?? 201m, leverage ?? 1000m);
@@ -490,7 +496,10 @@ public class Program
                                     recommendation.CurrentPrice,
                                     accountBalance ?? 201m,
                                     leverage ?? 1000m,
-                                    profitTargets);
+                                    profitTargets,
+                                    recommendation.Direction,
+                                    recommendation.StopLossPrice > 0 ? recommendation.StopLossPrice : null,
+                                    recommendation.TakeProfitPrice > 0 ? recommendation.TakeProfitPrice : null);
                             }
                         }
                         
