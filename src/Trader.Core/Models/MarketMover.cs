@@ -66,6 +66,11 @@ public class MarketMover
     /// The timestamp of the data
     /// </summary>
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    
+    /// <summary>
+    /// The recommended trade based on EMA analysis
+    /// </summary>
+    public TradeRecommendation? RecommendedTrade { get; set; }
 }
 
 /// <summary>
@@ -168,4 +173,108 @@ public enum AssetType
 {
     Forex,
     Crypto
+}
+
+/// <summary>
+/// Represents a trade recommendation based on technical analysis
+/// </summary>
+public class TradeRecommendation
+{
+    /// <summary>
+    /// The trade direction (Buy or Sell)
+    /// </summary>
+    public string Direction { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// The type of order to place
+    /// </summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public OrderType OrderType { get; set; } = OrderType.MarketBuy;
+    
+    /// <summary>
+    /// The entry price for the trade
+    /// </summary>
+    public decimal EntryPrice { get; set; }
+    
+    /// <summary>
+    /// The stop loss price for the trade
+    /// </summary>
+    public decimal StopLossPrice { get; set; }
+    
+    /// <summary>
+    /// The take profit price for the trade
+    /// </summary>
+    public decimal TakeProfitPrice { get; set; }
+    
+    /// <summary>
+    /// The risk-reward ratio for the trade
+    /// </summary>
+    public decimal RiskRewardRatio 
+    { 
+        get
+        {
+            if (EntryPrice == 0 || StopLossPrice == 0 || TakeProfitPrice == 0 || EntryPrice == StopLossPrice)
+                return 0;
+                
+            decimal reward = Math.Abs(TakeProfitPrice - EntryPrice);
+            decimal risk = Math.Abs(EntryPrice - StopLossPrice);
+            
+            if (risk == 0)
+                return 0;
+                
+            return reward / risk;
+        }
+    }
+    
+    /// <summary>
+    /// The rationale for the trade recommendation
+    /// </summary>
+    public string Rationale { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// The signals that triggered this trade recommendation
+    /// </summary>
+    public List<string> Signals { get; set; } = new List<string>();
+    
+    /// <summary>
+    /// The timestamp when this recommendation was generated
+    /// </summary>
+    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// Represents the type of order to place
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum OrderType
+{
+    /// <summary>
+    /// Execute a buy trade immediately at the current market price
+    /// </summary>
+    MarketBuy,
+    
+    /// <summary>
+    /// Execute a sell trade immediately at the current market price
+    /// </summary>
+    MarketSell,
+    
+    /// <summary>
+    /// Buy when price falls to a specified level below current price
+    /// </summary>
+    LimitBuy,
+    
+    /// <summary>
+    /// Sell when price rises to a specified level above current price
+    /// </summary>
+    LimitSell,
+    
+    /// <summary>
+    /// Buy when price rises to a specified level above current price
+    /// </summary>
+    StopBuy,
+    
+    /// <summary>
+    /// Sell when price falls to a specified level below current price
+    /// </summary>
+    StopSell
 } 

@@ -1238,7 +1238,10 @@ public class Program
             }
         })
         .WithName("GetTopForexMovers")
-        .WithOpenApi();
+        .WithOpenApi(operation => {
+            operation.Description = "Get top forex market movers. Note: This endpoint uses approximately 3x the requested count in API calls to ensure sufficient data.";
+            return operation;
+        });
         
         // Get top crypto market movers
         app.MapGet("/api/market-movers/crypto", async (
@@ -1275,7 +1278,10 @@ public class Program
             }
         })
         .WithName("GetTopCryptoMovers")
-        .WithOpenApi();
+        .WithOpenApi(operation => {
+            operation.Description = "Get top crypto market movers. Note: This endpoint uses approximately 3x the requested count in API calls to ensure sufficient data.";
+            return operation;
+        });
         
         // Get top forex market movers with EMA filters
         app.MapGet("/api/market-movers/forex/ema-filtered", async (
@@ -1284,7 +1290,7 @@ public class Program
             int count = 10,
             string shortTermTimeframe = "Hours1",
             string longTermTimeframe = "Day1",
-            string provider = "TwelveData") =>
+            string provider = "TraderMade") =>
         {
             try
             {
@@ -1315,7 +1321,10 @@ public class Program
                 var filteredMarketMovers = await marketMoversService.ApplyEmaFiltersAsync(
                     marketMovers, shortTermTimeframeEnum, longTermTimeframeEnum, providerType);
                 
-                return Results.Ok(filteredMarketMovers);
+                // Generate trade recommendations
+                var marketMoversWithRecommendations = await marketMoversService.GenerateTradeRecommendationsAsync(filteredMarketMovers);
+                
+                return Results.Ok(marketMoversWithRecommendations);
             }
             catch (Exception ex)
             {
@@ -1324,7 +1333,10 @@ public class Program
             }
         })
         .WithName("GetTopForexMoversWithEmaFilters")
-        .WithOpenApi();
+        .WithOpenApi(operation => {
+            operation.Description = "Get top forex market movers with EMA filters applied. Note: This endpoint uses data caching to minimize API calls.";
+            return operation;
+        });
         
         // Get top crypto market movers with EMA filters
         app.MapGet("/api/market-movers/crypto/ema-filtered", async (
@@ -1333,7 +1345,7 @@ public class Program
             int count = 10,
             string shortTermTimeframe = "Hours1",
             string longTermTimeframe = "Day1",
-            string provider = "TwelveData") =>
+            string provider = "TraderMade") =>
         {
             try
             {
@@ -1364,7 +1376,10 @@ public class Program
                 var filteredMarketMovers = await marketMoversService.ApplyEmaFiltersAsync(
                     marketMovers, shortTermTimeframeEnum, longTermTimeframeEnum, providerType);
                 
-                return Results.Ok(filteredMarketMovers);
+                // Generate trade recommendations
+                var marketMoversWithRecommendations = await marketMoversService.GenerateTradeRecommendationsAsync(filteredMarketMovers);
+                
+                return Results.Ok(marketMoversWithRecommendations);
             }
             catch (Exception ex)
             {
@@ -1373,7 +1388,10 @@ public class Program
             }
         })
         .WithName("GetTopCryptoMoversWithEmaFilters")
-        .WithOpenApi();
+        .WithOpenApi(operation => {
+            operation.Description = "Get top crypto market movers with EMA filters applied. Note: This endpoint uses data caching to minimize API calls.";
+            return operation;
+        });
 
         app.Run();
     }

@@ -38,4 +38,11 @@ public interface IMarketMoversService
         ChartTimeframe shortTermTimeframe = ChartTimeframe.Hours1, 
         ChartTimeframe longTermTimeframe = ChartTimeframe.Day1,
         DataProviderType providerType = DataProviderType.TwelveData);
+    
+    /// <summary>
+    /// Generates trade recommendations for market movers based on EMA analysis
+    /// </summary>
+    /// <param name="marketMovers">The market movers to generate recommendations for</param>
+    /// <returns>The market movers with trade recommendations</returns>
+    Task<List<MarketMover>> GenerateTradeRecommendationsAsync(List<MarketMover> marketMovers);
 } 
