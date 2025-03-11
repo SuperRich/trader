@@ -678,6 +678,7 @@ YOU MUST:
                     CurrentPrice = r.currentPrice,
                     TakeProfitPrice = r.takeProfitPrice,
                     StopLossPrice = r.stopLossPrice,
+                    RiskLevel = "Medium", // Default risk level
                     Factors = r.factors != null ? r.factors : new List<string>(),
                     Rationale = !string.IsNullOrEmpty(r.rationale) ? r.rationale : "Trading recommendation based on current market analysis",
                     Sources = r.sources != null ? r.sources : new List<string>(),
@@ -705,6 +706,7 @@ YOU MUST:
                     CurrentPrice = 1.0m, // Arbitrary non-zero value
                     TakeProfitPrice = 1.01m, // Above current price
                     StopLossPrice = 0.99m, // Below current price
+                    RiskLevel = "Medium", // Default risk level
                     Factors = new List<string> { "Error fetching recommendations" },
                     Sources = new List<string>(),
                     Rationale = "Could not retrieve trading recommendations at this time. Please try again later."

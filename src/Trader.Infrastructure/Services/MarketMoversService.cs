@@ -32,7 +32,27 @@ public class MarketMoversService : IMarketMoversService
     };
     
     // Cache for candle data to reduce API calls
-    private readonly Dictionary<string, Dictionary<ChartTimeframe, List<CandleData>>> _candleCache = new();
+    private class CacheEntry
+    {
+        public List<CandleData> Candles { get; set; } = new();
+        public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    }
+    
+    private readonly Dictionary<string, Dictionary<ChartTimeframe, CacheEntry>> _candleCache = new();
+    
+    // Cache for historical volatility to prioritize pairs
+    private readonly Dictionary<string, decimal> _volatilityCache = new();
+    private DateTime _volatilityCacheTimestamp = DateTime.MinValue;
+    
+    // Cache expiration times (in minutes)
+    private const int CACHE_EXPIRATION_MINUTES_5 = 5;
+    private const int CACHE_EXPIRATION_MINUTES_15 = 15;
+    private const int CACHE_EXPIRATION_HOURS_1 = 60;
+    private const int CACHE_EXPIRATION_HOURS_4 = 240;
+    private const int CACHE_EXPIRATION_DAY_1 = 1440;
+    
+    // Volatility cache expiration (24 hours)
+    private const int VOLATILITY_CACHE_EXPIRATION_HOURS = 24;
     
     public MarketMoversService(
         IForexDataProviderFactory dataProviderFactory,
@@ -54,32 +74,29 @@ public class MarketMoversService : IMarketMoversService
         var dataProvider = _dataProviderFactory.GetProvider(providerType);
         var marketMovers = new List<MarketMover>();
         
-        // Limit the number of pairs to analyze based on count to reduce API calls
-        // We'll analyze at most 3x the requested count to ensure we have enough data
-        // after filtering out pairs with insufficient data
-        int pairsToAnalyze = Math.Min(_commonForexPairs.Length, count * 3);
-        var pairsToCheck = _commonForexPairs.Take(pairsToAnalyze).ToArray();
+        // Get prioritized pairs based on historical volatility or recent activity
+        var pairsToCheck = GetPrioritizedForexPairs(count, timeframe, providerType, dataProvider);
         
         _logger.LogInformation("Analyzing {Count} forex pairs to find top {RequestedCount} movers", 
-            pairsToAnalyze, count);
+            pairsToCheck.Length, count);
         
-        // Get data for selected forex pairs
+        // Get data for selected forex pairs - try to batch fetch if possible
+        var candles = await BatchFetchCandlesAsync(pairsToCheck, timeframe, 100, dataProvider);
+        
+        // Process the candle data for each pair
         foreach (var pair in pairsToCheck)
         {
             try
             {
-                // Get candle data and cache it for later use
-                var candles = await GetCandleDataAsync(pair, timeframe, 100, dataProvider);
-                
-                if (candles.Count < 2)
+                if (!candles.TryGetValue(pair, out var pairCandles) || pairCandles.Count < 2)
                 {
                     _logger.LogWarning("Not enough candles for {Pair}, skipping", pair);
                     continue;
                 }
                 
                 // Calculate pip movement
-                var currentPrice = candles.Last().Close;
-                var previousPrice = candles[candles.Count - 2].Close;
+                var currentPrice = pairCandles.Last().Close;
+                var previousPrice = pairCandles[pairCandles.Count - 2].Close;
                 
                 // Calculate pip movement based on the pair
                 decimal pipMovement = CalculatePipMovement(pair, currentPrice, previousPrice);
@@ -92,14 +109,17 @@ public class MarketMoversService : IMarketMoversService
                     PipMovement = pipMovement,
                     Timeframe = timeframe,
                     AssetType = AssetType.Forex,
-                    Timestamp = candles.Last().Timestamp
+                    Timestamp = pairCandles.Last().Timestamp
                 };
                 
                 marketMovers.Add(marketMover);
+                
+                // Update volatility cache for future prioritization
+                _volatilityCache[pair] = Math.Abs(pipMovement);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error getting data for {Pair}", pair);
+                _logger.LogError(ex, "Error processing data for {Pair}", pair);
             }
         }
         
@@ -122,32 +142,29 @@ public class MarketMoversService : IMarketMoversService
         var dataProvider = _dataProviderFactory.GetProvider(providerType);
         var marketMovers = new List<MarketMover>();
         
-        // Limit the number of pairs to analyze based on count to reduce API calls
-        // We'll analyze at most 3x the requested count to ensure we have enough data
-        // after filtering out pairs with insufficient data
-        int pairsToAnalyze = Math.Min(_commonCryptoPairs.Length, count * 3);
-        var pairsToCheck = _commonCryptoPairs.Take(pairsToAnalyze).ToArray();
+        // Get prioritized pairs based on historical volatility or recent activity
+        var pairsToCheck = GetPrioritizedCryptoPairs(count, timeframe, providerType, dataProvider);
         
         _logger.LogInformation("Analyzing {Count} crypto pairs to find top {RequestedCount} movers", 
-            pairsToAnalyze, count);
+            pairsToCheck.Length, count);
         
-        // Get data for selected crypto pairs
+        // Get data for selected crypto pairs - try to batch fetch if possible
+        var candles = await BatchFetchCandlesAsync(pairsToCheck, timeframe, 100, dataProvider);
+        
+        // Process the candle data for each pair
         foreach (var pair in pairsToCheck)
         {
             try
             {
-                // Get candle data and cache it for later use
-                var candles = await GetCandleDataAsync(pair, timeframe, 100, dataProvider);
-                
-                if (candles.Count < 2)
+                if (!candles.TryGetValue(pair, out var pairCandles) || pairCandles.Count < 2)
                 {
                     _logger.LogWarning("Not enough candles for {Pair}, skipping", pair);
                     continue;
                 }
                 
                 // Calculate pip movement (for crypto, we use points instead of pips)
-                var currentPrice = candles.Last().Close;
-                var previousPrice = candles[candles.Count - 2].Close;
+                var currentPrice = pairCandles.Last().Close;
+                var previousPrice = pairCandles[pairCandles.Count - 2].Close;
                 
                 // For crypto, we use points instead of pips (1 point = 1 unit of price)
                 decimal pipMovement = (currentPrice - previousPrice);
@@ -160,14 +177,17 @@ public class MarketMoversService : IMarketMoversService
                     PipMovement = pipMovement,
                     Timeframe = timeframe,
                     AssetType = AssetType.Crypto,
-                    Timestamp = candles.Last().Timestamp
+                    Timestamp = pairCandles.Last().Timestamp
                 };
                 
                 marketMovers.Add(marketMover);
+                
+                // Update volatility cache for future prioritization
+                _volatilityCache[pair] = Math.Abs(pipMovement);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error getting data for {Pair}", pair);
+                _logger.LogError(ex, "Error processing data for {Pair}", pair);
             }
         }
         
@@ -189,45 +209,54 @@ public class MarketMoversService : IMarketMoversService
         
         var dataProvider = _dataProviderFactory.GetProvider(providerType);
         
+        // Batch fetch short-term candles for all symbols
+        var symbols = marketMovers.Select(m => m.Symbol).ToArray();
+        var shortTermCandles = await BatchFetchCandlesAsync(symbols, shortTermTimeframe, 100, dataProvider);
+        
+        // Batch fetch long-term candles for all symbols
+        var longTermCandles = await BatchFetchCandlesAsync(symbols, longTermTimeframe, 100, dataProvider);
+        
         foreach (var marketMover in marketMovers)
         {
             try
             {
                 _logger.LogInformation("Calculating EMAs for {Symbol}", marketMover.Symbol);
                 
-                // Get short-term data for 10/20 EMA - reuse cached data if possible
-                var shortTermCandles = await GetCandleDataAsync(
-                    marketMover.Symbol, shortTermTimeframe, 100, dataProvider);
-                
-                _logger.LogInformation("Retrieved {Count} candles for {Symbol} at {Timeframe} timeframe", 
-                    shortTermCandles.Count, marketMover.Symbol, shortTermTimeframe);
-                
-                if (shortTermCandles.Count < 21) // Need at least 21 candles for 20-period EMA
+                // Get short-term data for 10/20 EMA from the batch results
+                if (!shortTermCandles.TryGetValue(marketMover.Symbol, out var symbolShortTermCandles) || 
+                    symbolShortTermCandles.Count < 21) // Need at least 21 candles for 20-period EMA
                 {
-                    _logger.LogWarning("Not enough short-term candles for {Symbol} (only {Count}), skipping EMA filters", 
-                        marketMover.Symbol, shortTermCandles.Count);
+                    _logger.LogWarning("Not enough short-term candles for {Symbol}, skipping EMA filters", 
+                        marketMover.Symbol);
                     continue;
                 }
                 
-                // Get long-term data for 50 EMA - reuse cached data if possible
-                var longTermCandles = await GetCandleDataAsync(
-                    marketMover.Symbol, longTermTimeframe, 100, dataProvider);
+                _logger.LogInformation("Retrieved {Count} candles for {Symbol} at {Timeframe} timeframe", 
+                    symbolShortTermCandles.Count, marketMover.Symbol, shortTermTimeframe);
+                
+                // Get long-term data for 50 EMA from the batch results
+                if (!longTermCandles.TryGetValue(marketMover.Symbol, out var symbolLongTermCandles))
+                {
+                    _logger.LogWarning("No long-term candles for {Symbol}, skipping 50 EMA filter", 
+                        marketMover.Symbol);
+                    symbolLongTermCandles = new List<CandleData>();
+                }
                 
                 _logger.LogInformation("Retrieved {Count} candles for {Symbol} at {Timeframe} timeframe", 
-                    longTermCandles.Count, marketMover.Symbol, longTermTimeframe);
+                    symbolLongTermCandles.Count, marketMover.Symbol, longTermTimeframe);
                 
-                bool has50EmaData = longTermCandles.Count >= 51; // Need at least 51 candles for 50-period EMA
+                bool has50EmaData = symbolLongTermCandles.Count >= 51; // Need at least 51 candles for 50-period EMA
                 
                 if (!has50EmaData)
                 {
                     _logger.LogWarning("Not enough long-term candles for {Symbol} (only {Count}), skipping 50 EMA filter", 
-                        marketMover.Symbol, longTermCandles.Count);
+                        marketMover.Symbol, symbolLongTermCandles.Count);
                 }
                 
                 try
                 {
                     // Calculate EMAs
-                    var closePrices = shortTermCandles.Select(c => c.Close).ToList();
+                    var closePrices = symbolShortTermCandles.Select(c => c.Close).ToList();
                     
                     // Debug log the prices
                     _logger.LogDebug("Close prices for {Symbol}: {Prices}", 
@@ -245,7 +274,7 @@ public class MarketMoversService : IMarketMoversService
                     // Calculate 50 EMA if we have enough long-term candles
                     if (has50EmaData)
                     {
-                        var longTermClosePrices = longTermCandles.Select(c => c.Close).ToList();
+                        var longTermClosePrices = symbolLongTermCandles.Select(c => c.Close).ToList();
                         decimal ema50 = CalculateEMA(longTermClosePrices, 50);
                         _logger.LogDebug("Calculated EMA50 for {Symbol}: {EMA50}", marketMover.Symbol, ema50);
                         marketMover.EmaValues[50] = ema50;
@@ -287,7 +316,7 @@ public class MarketMoversService : IMarketMoversService
                     }
                     
                     // Price breaking through EMAs (crossed within last 3 candles)
-                    var recentCandles = shortTermCandles.TakeLast(3).ToList();
+                    var recentCandles = symbolShortTermCandles.TakeLast(3).ToList();
                     
                     emaStatus.IsBreakingThroughEma10 = recentCandles.Any(c => 
                         (c.Low < ema10 && c.Close > ema10) || (c.High > ema10 && c.Close < ema10));
@@ -298,7 +327,7 @@ public class MarketMoversService : IMarketMoversService
                     if (marketMover.EmaValues.ContainsKey(50))
                     {
                         decimal ema50 = marketMover.EmaValues[50];
-                        var longTermRecentCandles = longTermCandles.TakeLast(3).ToList();
+                        var longTermRecentCandles = symbolLongTermCandles.TakeLast(3).ToList();
                         
                         emaStatus.IsBreakingThroughEma50 = longTermRecentCandles.Any(c => 
                             (c.Low < ema50 && c.Close > ema50) || (c.High > ema50 && c.Close < ema50));
@@ -325,6 +354,200 @@ public class MarketMoversService : IMarketMoversService
     }
     
     /// <summary>
+    /// Gets prioritized forex pairs based on historical volatility or recent activity
+    /// </summary>
+    private string[] GetPrioritizedForexPairs(
+        int count, 
+        ChartTimeframe timeframe, 
+        DataProviderType providerType,
+        IForexDataProvider dataProvider)
+    {
+        // If we have recent volatility data, use it to prioritize pairs
+        if (_volatilityCacheTimestamp.AddHours(VOLATILITY_CACHE_EXPIRATION_HOURS) > DateTime.UtcNow &&
+            _volatilityCache.Keys.Any(k => _commonForexPairs.Contains(k)))
+        {
+            _logger.LogInformation("Using cached volatility data to prioritize forex pairs");
+            
+            // Get pairs that we have volatility data for
+            var cachedPairs = _volatilityCache.Keys
+                .Where(k => _commonForexPairs.Contains(k))
+                .OrderByDescending(k => _volatilityCache[k])
+                .Take(Math.Min(_commonForexPairs.Length, count * 2)) // Use 2x instead of 3x
+                .ToArray();
+            
+            // If we have enough cached pairs, return them
+            if (cachedPairs.Length >= Math.Min(count * 2, _commonForexPairs.Length))
+            {
+                return cachedPairs;
+            }
+            
+            // Otherwise, add some random pairs to ensure diversity
+            var remainingPairs = _commonForexPairs
+                .Where(p => !cachedPairs.Contains(p))
+                .OrderBy(_ => Guid.NewGuid()) // Randomize
+                .Take(Math.Min(_commonForexPairs.Length, count * 2) - cachedPairs.Length)
+                .ToArray();
+            
+            return cachedPairs.Concat(remainingPairs).ToArray();
+        }
+        
+        // If we don't have volatility data, use a smaller subset of common pairs
+        // For the first request, we'll analyze fewer pairs to reduce API calls
+        int pairsToAnalyze = Math.Min(_commonForexPairs.Length, Math.Max(count * 2, 10));
+        
+        // Start with the most commonly traded pairs
+        var commonPairs = new[] { "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD" };
+        
+        // Add some random pairs to ensure diversity
+        var randomPairs = _commonForexPairs
+            .Where(p => !commonPairs.Contains(p))
+            .OrderBy(_ => Guid.NewGuid()) // Randomize
+            .Take(pairsToAnalyze - commonPairs.Length)
+            .ToArray();
+        
+        return commonPairs.Concat(randomPairs).ToArray();
+    }
+    
+    /// <summary>
+    /// Gets prioritized crypto pairs based on historical volatility or recent activity
+    /// </summary>
+    private string[] GetPrioritizedCryptoPairs(
+        int count, 
+        ChartTimeframe timeframe, 
+        DataProviderType providerType,
+        IForexDataProvider dataProvider)
+    {
+        // If we have recent volatility data, use it to prioritize pairs
+        if (_volatilityCacheTimestamp.AddHours(VOLATILITY_CACHE_EXPIRATION_HOURS) > DateTime.UtcNow &&
+            _volatilityCache.Keys.Any(k => _commonCryptoPairs.Contains(k)))
+        {
+            _logger.LogInformation("Using cached volatility data to prioritize crypto pairs");
+            
+            // Get pairs that we have volatility data for
+            var cachedPairs = _volatilityCache.Keys
+                .Where(k => _commonCryptoPairs.Contains(k))
+                .OrderByDescending(k => _volatilityCache[k])
+                .Take(Math.Min(_commonCryptoPairs.Length, count * 2)) // Use 2x instead of 3x
+                .ToArray();
+            
+            // If we have enough cached pairs, return them
+            if (cachedPairs.Length >= Math.Min(count * 2, _commonCryptoPairs.Length))
+            {
+                return cachedPairs;
+            }
+            
+            // Otherwise, add some random pairs to ensure diversity
+            var remainingPairs = _commonCryptoPairs
+                .Where(p => !cachedPairs.Contains(p))
+                .OrderBy(_ => Guid.NewGuid()) // Randomize
+                .Take(Math.Min(_commonCryptoPairs.Length, count * 2) - cachedPairs.Length)
+                .ToArray();
+            
+            return cachedPairs.Concat(remainingPairs).ToArray();
+        }
+        
+        // If we don't have volatility data, use a smaller subset of common pairs
+        // For the first request, we'll analyze fewer pairs to reduce API calls
+        int pairsToAnalyze = Math.Min(_commonCryptoPairs.Length, Math.Max(count * 2, 8));
+        
+        // Start with the most commonly traded pairs
+        var commonPairs = new[] { "BTCUSD", "ETHUSD", "XRPUSD", "LTCUSD" };
+        
+        // Add some random pairs to ensure diversity
+        var randomPairs = _commonCryptoPairs
+            .Where(p => !commonPairs.Contains(p))
+            .OrderBy(_ => Guid.NewGuid()) // Randomize
+            .Take(pairsToAnalyze - commonPairs.Length)
+            .ToArray();
+        
+        return commonPairs.Concat(randomPairs).ToArray();
+    }
+    
+    /// <summary>
+    /// Batch fetches candle data for multiple symbols to reduce API calls
+    /// </summary>
+    private async Task<Dictionary<string, List<CandleData>>> BatchFetchCandlesAsync(
+        string[] symbols, 
+        ChartTimeframe timeframe, 
+        int count,
+        IForexDataProvider dataProvider)
+    {
+        var result = new Dictionary<string, List<CandleData>>();
+        var symbolsToFetch = new List<string>();
+        
+        // Check cache first for each symbol
+        foreach (var symbol in symbols)
+        {
+            if (IsCandleDataCached(symbol, timeframe, count))
+            {
+                result[symbol] = await GetCandleDataAsync(symbol, timeframe, count, dataProvider);
+            }
+            else
+            {
+                symbolsToFetch.Add(symbol);
+            }
+        }
+        
+        if (symbolsToFetch.Count == 0)
+        {
+            return result;
+        }
+        
+        // TODO: Implement batch fetching if the provider supports it
+        // For now, fetch each symbol individually
+        foreach (var symbol in symbolsToFetch)
+        {
+            try
+            {
+                result[symbol] = await GetCandleDataAsync(symbol, timeframe, count, dataProvider);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching candle data for {Symbol}", symbol);
+                result[symbol] = new List<CandleData>();
+            }
+        }
+        
+        return result;
+    }
+    
+    /// <summary>
+    /// Checks if candle data is cached and not expired
+    /// </summary>
+    private bool IsCandleDataCached(string symbol, ChartTimeframe timeframe, int count)
+    {
+        if (_candleCache.TryGetValue(symbol, out var timeframeCache) && 
+            timeframeCache.TryGetValue(timeframe, out var cacheEntry) && 
+            cacheEntry.Candles.Count >= count)
+        {
+            // Check if the cache is still valid based on timeframe
+            var expirationMinutes = GetCacheExpirationMinutes(timeframe);
+            if (cacheEntry.Timestamp.AddMinutes(expirationMinutes) > DateTime.UtcNow)
+            {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    /// <summary>
+    /// Gets the cache expiration time in minutes based on timeframe
+    /// </summary>
+    private int GetCacheExpirationMinutes(ChartTimeframe timeframe)
+    {
+        return timeframe switch
+        {
+            ChartTimeframe.Minutes5 => CACHE_EXPIRATION_MINUTES_5,
+            ChartTimeframe.Minutes15 => CACHE_EXPIRATION_MINUTES_15,
+            ChartTimeframe.Hours1 => CACHE_EXPIRATION_HOURS_1,
+            ChartTimeframe.Hours4 => CACHE_EXPIRATION_HOURS_4,
+            ChartTimeframe.Day1 => CACHE_EXPIRATION_DAY_1,
+            _ => CACHE_EXPIRATION_HOURS_1 // Default to 1 hour
+        };
+    }
+    
+    /// <summary>
     /// Gets candle data for a symbol and timeframe, using cache when possible
     /// </summary>
     /// <param name="symbol">The symbol to get data for</param>
@@ -338,26 +561,28 @@ public class MarketMoversService : IMarketMoversService
         int count,
         IForexDataProvider dataProvider)
     {
-        // Check if we have cached data for this symbol and timeframe
-        if (_candleCache.TryGetValue(symbol, out var timeframeCache) && 
-            timeframeCache.TryGetValue(timeframe, out var candles) && 
-            candles.Count >= count)
+        // Check if we have valid cached data for this symbol and timeframe
+        if (IsCandleDataCached(symbol, timeframe, count))
         {
             _logger.LogInformation("Using cached data for {Symbol} at {Timeframe} timeframe", symbol, timeframe);
-            return candles;
+            return _candleCache[symbol][timeframe].Candles;
         }
         
         // If not, get the data from the provider
         _logger.LogInformation("Fetching data for {Symbol} at {Timeframe} timeframe", symbol, timeframe);
         var newCandles = await dataProvider.GetCandleDataAsync(symbol, timeframe, count);
         
-        // Cache the data
+        // Cache the data with timestamp
         if (!_candleCache.ContainsKey(symbol))
         {
-            _candleCache[symbol] = new Dictionary<ChartTimeframe, List<CandleData>>();
+            _candleCache[symbol] = new Dictionary<ChartTimeframe, CacheEntry>();
         }
         
-        _candleCache[symbol][timeframe] = newCandles;
+        _candleCache[symbol][timeframe] = new CacheEntry
+        {
+            Candles = newCandles,
+            Timestamp = DateTime.UtcNow
+        };
         
         return newCandles;
     }

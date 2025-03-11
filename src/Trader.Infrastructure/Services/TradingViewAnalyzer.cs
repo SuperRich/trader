@@ -418,68 +418,25 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
 
 
             // Fetch candle data for multiple timeframes - focusing on higher timeframes
-
-
-            // We'll skip 5-minute data entirely for more stable recommendations
-
-
+            // We'll skip 5-minute data and daily data to reduce API calls
             var candleTasks = new[]
-
-
             {
-
-
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 24),  // More 1H candles
-
-
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 12),  // More 4H candles
-
-
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Day1, 10)     // More daily candles
-
-
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 24),  // 1H candles
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 12)   // 4H candles
             };
-
-
             
-
-
             // Wait for all data to be retrieved
-
-
             await Task.WhenAll(candleTasks);
-
-
             
-
-
             // Extract candle data for each timeframe
-
-
             var candles1h = await candleTasks[0];
-
-
             var candles4h = await candleTasks[1];
-
-
-            var candles1d = await candleTasks[2];
-
-
             
-
-
-            // Create an empty list for 5m data (we're not using it anymore)
-
-
+            // Create empty lists for timeframes we're not using
             var candles5m = new List<CandleData>();
-
-
+            var candles1d = new List<CandleData>();
             
-
-
             // Save chart data to a text file for reference
-
-
             await SaveChartDataToFile(symbol, candles5m, candles1h, candles4h, candles1d);
 
 
@@ -513,7 +470,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                 {
 
 
-                    new { role = "system", content = "You are an expert trading analyst specializing in technical analysis and market sentiment. Focus on higher timeframes (daily, 4-hour, and 1-hour) for more reliable signals and to filter out market noise. Provide concise, accurate trading advice based on chart data. Be precise with price levels and never make up information. If you're uncertain about specific data points, acknowledge the limitations of your information. Prioritize longer-term trends over short-term fluctuations." },
+                    new { role = "system", content = "You are an expert trading analyst specializing in technical analysis and market sentiment. Focus on 4-hour and 1-hour timeframes for reliable signals and to filter out market noise. Provide concise, accurate trading advice based on chart data. Be precise with price levels and never make up information. If you're uncertain about specific data points, acknowledge the limitations of your information. Prioritize medium-term trends over short-term fluctuations." },
 
 
                     new { role = "user", content = prompt }
@@ -742,6 +699,9 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
 
 
                         CurrentEntryReason = sentimentData.currentEntryReason,
+
+
+                        RiskLevel = !string.IsNullOrEmpty(sentimentData.riskLevel) ? sentimentData.riskLevel : "Medium",
 
 
                         MarketSession = new MarketSessionInfo
@@ -1563,6 +1523,9 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             IsSafeToEnterAtCurrentPrice = false,
 
 
+            RiskLevel = "Medium",
+
+
             CurrentEntryReason = "This is a fallback recommendation due to lack of strong trading opportunities. Consider waiting for better market conditions.",
 
 
@@ -1677,49 +1640,10 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         
 
 
-        sb.AppendLine("Focus on the higher timeframes (daily, 4-hour, and 1-hour) for more reliable signals.");
+        sb.AppendLine("Focus on the 4-hour and 1-hour timeframes for reliable signals.");
 
 
-        sb.AppendLine("Ignore short-term noise and prioritize longer-term trends.");
-
-
-        sb.AppendLine();
-
-
-        
-
-
-        // Add daily candles (highest priority)
-
-
-        sb.AppendLine("## Daily Timeframe (Most Important)");
-
-
-        if (candles1d.Count > 0)
-
-
-        {
-
-
-            sb.AppendLine($"Last {candles1d.Count} daily candles:");
-
-
-            AppendCandleData(sb, candles1d);
-
-
-        }
-
-
-        else
-
-
-        {
-
-
-            sb.AppendLine("No daily data available.");
-
-
-        }
+        sb.AppendLine("Ignore short-term noise and prioritize medium-term trends.");
 
 
         sb.AppendLine();
@@ -1728,10 +1652,10 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         
 
 
-        // Add 4-hour candles (second priority)
+        // Add 4-hour candles (highest priority)
 
 
-        sb.AppendLine("## 4-Hour Timeframe (Important)");
+        sb.AppendLine("## 4-Hour Timeframe (Most Important)");
 
 
         if (candles4h.Count > 0)
@@ -1767,10 +1691,10 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         
 
 
-        // Add 1-hour candles (third priority)
+        // Add 1-hour candles (second priority)
 
 
-        sb.AppendLine("## 1-Hour Timeframe (Supplementary)");
+        sb.AppendLine("## 1-Hour Timeframe (Important)");
 
 
         if (candles1h.Count > 0)
@@ -1806,7 +1730,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         
 
 
-        // We're skipping 5-minute data entirely
+        // We're skipping daily and 5-minute data entirely
 
 
         
@@ -1872,19 +1796,22 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine("  \"validityPeriod\": \"how long this recommendation is valid for (e.g., '24 hours', '3 days')\",");
 
 
-        sb.AppendLine("  \"isSafeToEnterAtCurrentPrice\": true or false (whether it's still acceptable to enter at current price),");
+        sb.AppendLine("  \"isSafeToEnterAtCurrentPrice\": true or false,");
 
 
-        sb.AppendLine("  \"currentEntryReason\": \"detailed explanation of why it's safe or unsafe to enter at current price\",");
+        sb.AppendLine("  \"currentEntryReason\": \"explanation of why it's safe or unsafe to enter at current price\",");
 
 
-        sb.AppendLine("  \"factors\": [\"factor1\", \"factor2\", ...],");
+        sb.AppendLine("  \"riskLevel\": \"Low\", \"Medium\", \"High\", or \"Very High\",");
 
 
-        sb.AppendLine("  \"summary\": \"Brief summary of the analysis\",");
+        sb.AppendLine("  \"factors\": [\"list\", \"of\", \"factors\"],");
 
 
-        sb.AppendLine("  \"sources\": []");
+        sb.AppendLine("  \"summary\": \"brief summary of analysis\",");
+
+
+        sb.AppendLine("  \"sources\": [\"list\", \"of\", \"sources\"]");
 
 
         sb.AppendLine("}");
@@ -1894,6 +1821,12 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
 
 
         sb.AppendLine("Only recommend a trade if there is a clear setup with a good risk-reward ratio (at least 1.5:1). If there's no clear trade opportunity, set direction to \"None\".");
+
+
+        sb.AppendLine();
+
+
+        sb.AppendLine("If the current price isn't ideal for entry, suggest a better entry price in the bestEntryPrice field. This could be at a key support/resistance level, a retracement level, or a better risk-reward setup. However, don't be too conservative with the best entry price - if the current price is within 0.5% of your ideal entry for forex pairs (or 2% for crypto), consider the current price acceptable.");
 
 
         sb.AppendLine();
@@ -1935,16 +1868,37 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine("For the isSafeToEnterAtCurrentPrice field:");
 
 
-        sb.AppendLine("- Set to true if entering at the current price is still acceptable, even if not optimal");
+        sb.AppendLine("- Set to true if entering at the current price is acceptable, even if not optimal");
 
 
-        sb.AppendLine("- Set to false if entering at the current price would significantly reduce the risk-reward ratio or increase risk");
+        sb.AppendLine("- Set to false ONLY if entering at the current price would significantly reduce the risk-reward ratio or substantially increase risk");
+
+
+        sb.AppendLine("- Be more lenient with this flag - if the trade still has a positive risk-reward ratio at current price, set this to true");
 
 
         sb.AppendLine("- Consider factors like volatility, proximity to key levels, and overall market conditions");
 
 
-        sb.AppendLine("- This helps traders decide whether to wait for the best entry or execute immediately");
+        sb.AppendLine();
+
+
+        sb.AppendLine("For the riskLevel field:");
+
+
+        sb.AppendLine("- Set to \"Low\" for trades with strong confirmation, clear support/resistance, and favorable market conditions");
+
+
+        sb.AppendLine("- Set to \"Medium\" for standard trades with reasonable confirmation and acceptable risk-reward");
+
+
+        sb.AppendLine("- Set to \"High\" for trades with less confirmation, higher volatility, or proximity to key levels");
+
+
+        sb.AppendLine("- Set to \"Very High\" for counter-trend trades, trades with minimal confirmation, or during high-impact news events");
+
+
+        sb.AppendLine("- Consider factors like trend strength, confirmation signals, volatility, and proximity to key levels");
 
 
         sb.AppendLine();
@@ -3237,6 +3191,9 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             CurrentEntryReason = analysis.CurrentEntryReason,
 
 
+            RiskLevel = analysis.RiskLevel,
+
+
             Factors = analysis.Factors,
 
 
@@ -3397,6 +3354,9 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
 
 
         public string currentEntryReason { get; set; } = string.Empty;
+
+
+        public string riskLevel { get; set; } = "Medium";
 
 
         public List<string>? factors { get; set; }

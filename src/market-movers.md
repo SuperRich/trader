@@ -292,32 +292,48 @@ The Market Movers service is designed to minimize API calls to external data pro
 ### Data Caching
 
 - The service implements an in-memory cache for candle data to avoid redundant API calls
+- Cache entries include timestamps and expire based on the timeframe:
+  - 5-minute data: expires after 5 minutes
+  - 15-minute data: expires after 15 minutes
+  - 1-hour data: expires after 60 minutes
+  - 4-hour data: expires after 240 minutes
+  - Daily data: expires after 24 hours
 - When you request EMA-filtered market movers, the service reuses cached data instead of making new API calls
 - This significantly reduces the number of API calls, especially when making multiple requests in a short period
 
 ### Smart Pair Selection
 
-- Instead of analyzing all available pairs (25 forex pairs or 15 crypto pairs), the service analyzes only a subset based on your requested count
-- For example, if you request the top 5 market movers, the service will analyze approximately 15 pairs (3x your requested count) instead of all 25
-- This optimization reduces API calls by up to 80% for small count values
+- Instead of analyzing all available pairs (25 forex pairs or 15 crypto pairs), the service uses several strategies to minimize API calls:
+  1. **Volatility-Based Selection**: After the first request, the service tracks which pairs have the highest volatility and prioritizes those in future requests
+  2. **Common Pairs First**: For the first request, the service starts with the most commonly traded pairs (e.g., EURUSD, GBPUSD, USDJPY for forex)
+  3. **Reduced Sample Size**: The service analyzes only 2x the requested count (down from 3x in the previous version)
+  4. **Random Sampling**: To ensure diversity, some random pairs are included in the analysis
+
+### Batch Processing
+
+- The service batches API requests whenever possible:
+  1. **Shared Data Fetching**: When applying EMA filters, the service fetches all required data in two batch operations instead of making separate calls for each pair
+  2. **Reuse Between Endpoints**: Data fetched for one endpoint can be reused by other endpoints if the timeframe matches
+  3. **Prioritized Processing**: The service processes the most important pairs first, so if there are any API issues, you still get results for the major pairs
 
 ### Recommendations for Minimizing API Usage
 
 1. **Use smaller count values**: Request only the number of market movers you actually need
 2. **Reuse the same provider**: Switching providers requires new API calls to fetch data
 3. **Use the EMA-filtered endpoints sparingly**: These endpoints require more data and calculations
-4. **Consider caching results client-side**: If you need to display the same data multiple times, cache it in your application
+4. **Make consecutive requests**: The second and subsequent requests will use much fewer API calls due to caching
+5. **Use higher timeframes**: Higher timeframes (Hours1, Hours4, Day1) have longer cache expiration times
 
 ### API Call Estimates
 
-| Endpoint | API Calls Formula | Example (count=5) |
-|----------|-------------------|-------------------|
-| `/api/market-movers/forex` | ~3 × count | ~15 calls |
-| `/api/market-movers/crypto` | ~3 × count | ~15 calls |
-| `/api/market-movers/forex/ema-filtered` | ~3 × count + count | ~20 calls |
-| `/api/market-movers/crypto/ema-filtered` | ~3 × count + count | ~20 calls |
+| Endpoint | First Request | Subsequent Requests (within cache period) |
+|----------|---------------|-------------------------------------------|
+| `/api/market-movers/forex?count=1` | ~10 calls | 0-2 calls |
+| `/api/market-movers/forex?count=5` | ~10-15 calls | 0-5 calls |
+| `/api/market-movers/forex/ema-filtered?count=1` | ~12 calls | 0-2 calls |
+| `/api/market-movers/forex/ema-filtered?count=5` | ~15-20 calls | 0-5 calls |
 
-These estimates assume no cached data is available. Subsequent calls will use significantly fewer API calls due to caching.
+These estimates show a significant improvement over the previous implementation, which could make up to 54 API calls for a single request.
 
 ## Trading Strategies Using Market Movers
 

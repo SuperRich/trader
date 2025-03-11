@@ -1239,7 +1239,7 @@ public class Program
         })
         .WithName("GetTopForexMovers")
         .WithOpenApi(operation => {
-            operation.Description = "Get top forex market movers. Note: This endpoint uses approximately 3x the requested count in API calls to ensure sufficient data.";
+            operation.Description = "Get top forex market movers. Uses smart pair selection and data caching to minimize API calls. First request analyzes ~10-15 pairs; subsequent requests use cached data when possible.";
             return operation;
         });
         
@@ -1279,7 +1279,7 @@ public class Program
         })
         .WithName("GetTopCryptoMovers")
         .WithOpenApi(operation => {
-            operation.Description = "Get top crypto market movers. Note: This endpoint uses approximately 3x the requested count in API calls to ensure sufficient data.";
+            operation.Description = "Get top crypto market movers. Uses smart pair selection and data caching to minimize API calls. First request analyzes ~10-15 pairs; subsequent requests use cached data when possible.";
             return operation;
         });
         
@@ -1334,7 +1334,7 @@ public class Program
         })
         .WithName("GetTopForexMoversWithEmaFilters")
         .WithOpenApi(operation => {
-            operation.Description = "Get top forex market movers with EMA filters applied. Note: This endpoint uses data caching to minimize API calls.";
+            operation.Description = "Get top forex market movers with EMA filters applied. Uses batch data fetching, smart pair selection, and time-based caching to minimize API calls. First request uses ~12-20 calls; subsequent requests use significantly fewer.";
             return operation;
         });
         
@@ -1389,7 +1389,7 @@ public class Program
         })
         .WithName("GetTopCryptoMoversWithEmaFilters")
         .WithOpenApi(operation => {
-            operation.Description = "Get top crypto market movers with EMA filters applied. Note: This endpoint uses data caching to minimize API calls.";
+            operation.Description = "Get top crypto market movers with EMA filters applied. Uses batch data fetching, smart pair selection, and time-based caching to minimize API calls. First request uses ~12-20 calls; subsequent requests use significantly fewer.";
             return operation;
         });
 

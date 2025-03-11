@@ -155,6 +155,11 @@ public class SentimentAnalysisResult
     public OrderType OrderType { get; set; } = OrderType.MarketBuy;
     
     /// <summary>
+    /// The risk level of the trade (Low, Medium, High, Very High).
+    /// </summary>
+    public string RiskLevel { get; set; } = "Medium";
+    
+    /// <summary>
     /// The risk-to-reward ratio of the recommended trade.
     /// </summary>
     public decimal RiskRewardRatio => 
@@ -380,6 +385,11 @@ public class ForexRecommendation
     /// Explains why it's safe or unsafe to enter at the current price, providing specific reasoning.
     /// </summary>
     public string CurrentEntryReason { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// The risk level of the trade (Low, Medium, High, Very High).
+    /// </summary>
+    public string RiskLevel { get; set; } = "Medium";
     
     /// <summary>
     /// Position sizing information for this currency pair.
