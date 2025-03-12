@@ -15,6 +15,10 @@ public class TraderMadeDataProvider : IForexDataProvider
     private readonly ILogger<TraderMadeDataProvider> _logger;
     private readonly string _apiKey;
     private const string BaseUrl = "https://marketdata.tradermade.com";
+    
+    // Cache for live rates to prevent excessive API calls
+    private readonly Dictionary<string, (LiveRateData Data, DateTime Timestamp)> _liveRateCache = new();
+    private readonly TimeSpan _liveCacheExpiration = TimeSpan.FromSeconds(5); // Cache live rates for 5 seconds
 
     public TraderMadeDataProvider(
         HttpClient httpClient,
@@ -41,6 +45,21 @@ public class TraderMadeDataProvider : IForexDataProvider
     public async Task<LiveRateData> GetLiveRateAsync(string symbol)
     {
         string formattedSymbol = FormatSymbolForTraderMade(symbol);
+        
+        // Check cache first
+        if (_liveRateCache.TryGetValue(formattedSymbol, out var cachedData))
+        {
+            if (DateTime.UtcNow - cachedData.Timestamp < _liveCacheExpiration)
+            {
+                _logger.LogInformation("Using cached live rate for {Symbol} from {Timestamp}", 
+                    symbol, cachedData.Timestamp);
+                return cachedData.Data;
+            }
+            else
+            {
+                _logger.LogInformation("Cached live rate for {Symbol} expired, fetching new data", symbol);
+            }
+        }
         
         _logger.LogInformation("Fetching TraderMade live rate for {Symbol}", symbol);
         
@@ -75,7 +94,7 @@ public class TraderMadeDataProvider : IForexDataProvider
         // Extract the quote for the requested symbol
         var quote = liveResponse.quotes[0];
         
-        return new LiveRateData
+        var liveRateData = new LiveRateData
         {
             Symbol = symbol,
             Bid = quote.bid,
@@ -83,6 +102,11 @@ public class TraderMadeDataProvider : IForexDataProvider
             Mid = quote.mid,
             Timestamp = DateTimeOffset.FromUnixTimeSeconds(liveResponse.timestamp).DateTime
         };
+        
+        // Update cache
+        _liveRateCache[formattedSymbol] = (liveRateData, DateTime.UtcNow);
+        
+        return liveRateData;
     }
 
     /// <summary>

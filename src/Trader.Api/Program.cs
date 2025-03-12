@@ -98,44 +98,56 @@ public class Program
         // Register our services
         builder.Services.AddSingleton<PredictionService>();
         
-        // Register all data providers
-        builder.Services.AddSingleton<ForexDataProvider>();
-        builder.Services.AddHttpClient<PolygonDataProvider>();
-        builder.Services.AddHttpClient<TraderMadeDataProvider>();
-        builder.Services.AddHttpClient<TwelveDataProvider>();
-        
-        // Register the data provider factory
+        // Register core services
+        builder.Services.AddSingleton<ForexMarketSessionService>();
+        builder.Services.AddSingleton<IPositionSizingService, PositionSizingService>();
+        builder.Services.AddSingleton<IMarketMoversService, MarketMoversService>();
         builder.Services.AddSingleton<IForexDataProviderFactory, ForexDataProviderFactory>();
         
-        // Register the forex market session service
-        builder.Services.AddSingleton<ForexMarketSessionService>();
-        
-        // Register the position sizing service
-        builder.Services.AddSingleton<IPositionSizingService, PositionSizingService>();
-        
-        // Register the market movers service
-        builder.Services.AddSingleton<IMarketMoversService, MarketMoversService>();
-        
-        // Register default data provider based on available API keys
-        if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
-        {
-            builder.Services.AddHttpClient<IForexDataProvider, PolygonDataProvider>();
-            Console.WriteLine("Using Polygon.io as default data provider");
-        }
-        else if (!string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]))
+        // Register data providers
+        if (!string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]))
         {
             builder.Services.AddHttpClient<IForexDataProvider, TraderMadeDataProvider>();
+            builder.Services.AddScoped<TraderMadeDataProvider>();
             Console.WriteLine("Using TraderMade as default data provider");
         }
         else if (!string.IsNullOrEmpty(builder.Configuration["TwelveData:ApiKey"]))
         {
             builder.Services.AddHttpClient<IForexDataProvider, TwelveDataProvider>();
+            builder.Services.AddScoped<TwelveDataProvider>();
             Console.WriteLine("Using TwelveData as default data provider");
+        }
+        else if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
+        {
+            builder.Services.AddHttpClient<IForexDataProvider, PolygonDataProvider>();
+            builder.Services.AddScoped<PolygonDataProvider>();
+            Console.WriteLine("Using Polygon as default data provider");
         }
         else
         {
             builder.Services.AddSingleton<IForexDataProvider, ForexDataProvider>();
             Console.WriteLine("Using mock forex data provider as default");
+        }
+        
+        // Register additional data providers if API keys are available
+        if (!string.IsNullOrEmpty(builder.Configuration["TwelveData:ApiKey"]) && 
+            builder.Configuration["TwelveData:ApiKey"] != builder.Configuration["TraderMade:ApiKey"])
+        {
+            builder.Services.AddHttpClient<TwelveDataProvider>();
+            builder.Services.AddScoped<TwelveDataProvider>();
+        }
+        
+        if (!string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]) && 
+            builder.Configuration["TraderMade:ApiKey"] != builder.Configuration["TwelveData:ApiKey"])
+        {
+            builder.Services.AddHttpClient<TraderMadeDataProvider>();
+            builder.Services.AddScoped<TraderMadeDataProvider>();
+        }
+        
+        if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
+        {
+            builder.Services.AddHttpClient<PolygonDataProvider>();
+            builder.Services.AddScoped<PolygonDataProvider>();
         }
         
         // Register sentiment analyzers
@@ -159,9 +171,7 @@ public class Program
         }
         else
         {
-            // Fallback to Perplexity analyzer even without API key (will throw an error when used)
-            builder.Services.AddHttpClient<ISentimentAnalyzer, PerplexitySentimentAnalyzer>();
-            Console.WriteLine("Using Perplexity sentiment analyzer (no API key provided)");
+            throw new InvalidOperationException("No sentiment analyzer could be configured. Please provide API keys.");
         }
         
         // Enable CORS
@@ -450,7 +460,7 @@ public class Program
                     loggerFactory.CreateLogger<TradingViewAnalyzer>(),
                     app.Services.GetRequiredService<ForexMarketSessionService>(),
                     app.Services.GetRequiredService<IPositionSizingService>(),
-                    providerType);
+                    app.Services);
                 
                 var analysis = await analyzer.AnalyzeSentimentAsync(symbol);
                 
@@ -544,7 +554,7 @@ public class Program
         
         // Endpoint to get recommended trading opportunities based on AI analysis
         app.MapGet("/api/trading/recommendations", 
-            async (int? count, ISentimentAnalyzer analyzer, ILogger<Program> logger,
+            async (int? count, string? provider, ISentimentAnalyzer analyzer, ILogger<Program> logger,
                    decimal? accountBalance, decimal? leverage, string? targetProfits) =>
         {
             try
@@ -552,8 +562,8 @@ public class Program
                 // Limit to reasonable values, default to 3
                 var pairCount = count.HasValue && count.Value > 0 && count.Value <= 5 ? count.Value : 3;
                 
-                logger.LogInformation("Getting {Count} trading recommendations", pairCount);
-                var recommendations = await analyzer.GetTradingRecommendationsAsync(pairCount);
+                logger.LogInformation("Getting {Count} trading recommendations using provider {Provider}", pairCount, provider ?? "default");
+                var recommendations = await analyzer.GetTradingRecommendationsAsync(pairCount, provider);
                 
                 // Add position sizing calculations with custom parameters if provided
                 if (recommendations != null && recommendations.Any() && 

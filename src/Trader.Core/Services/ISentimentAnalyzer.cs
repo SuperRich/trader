@@ -21,8 +21,9 @@ public interface ISentimentAnalyzer
     /// Gets recommended forex trading opportunities based on current market conditions.
     /// </summary>
     /// <param name="count">The number of recommendations to return (default: 3).</param>
+    /// <param name="provider">The data provider to use for price data (optional).</param>
     /// <returns>A list of trading recommendations for the most promising forex pairs.</returns>
-    Task<List<ForexRecommendation>> GetTradingRecommendationsAsync(int count = 3);
+    Task<List<ForexRecommendation>> GetTradingRecommendationsAsync(int count = 3, string? provider = null);
 }
 
 /// <summary>

@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Net.Http.Headers;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Trader.Core.Models;
 using Trader.Core.Services;
@@ -22,6 +23,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     private readonly ILogger<TradingViewAnalyzer> _logger;
     private readonly ForexMarketSessionService _marketSessionService;
     private readonly IPositionSizingService _positionSizingService;
+    private readonly IServiceProvider _serviceProvider;
 
     // Cache for recent analysis results to ensure consistency between endpoints
     private readonly Dictionary<string, (SentimentAnalysisResult Result, DateTime Timestamp)> _analysisCache = 
@@ -40,114 +42,38 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         ILogger<TradingViewAnalyzer> logger,
         ForexMarketSessionService marketSessionService,
         IPositionSizingService positionSizingService,
-        DataProviderType? providerType = null)
+        IServiceProvider serviceProvider)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        
-        // Try to get the OpenRouter API key first
-        var openRouterApiKey = configuration["OpenRouter:ApiKey"];
-        var envOpenRouterApiKey = configuration["TRADER_OPENROUTER_API_KEY"];
-        
-        // Then try to get the Perplexity API key
-        var perplexityApiKey = configuration["Perplexity:ApiKey"];
-        var envPerplexityApiKey = configuration["TRADER_PERPLEXITY_API_KEY"];
-        
-        // Log available API keys for debugging
-        logger.LogInformation("Available API keys: OpenRouter: {HasOpenRouter}, Perplexity: {HasPerplexity}",
-            !string.IsNullOrEmpty(openRouterApiKey) || !string.IsNullOrEmpty(envOpenRouterApiKey),
-            !string.IsNullOrEmpty(perplexityApiKey) || !string.IsNullOrEmpty(envPerplexityApiKey));
-        
-        // Determine which API to use - prioritize OpenRouter if available
-        if (!string.IsNullOrEmpty(openRouterApiKey) || !string.IsNullOrEmpty(envOpenRouterApiKey))
-        {
-            // Use OpenRouter
-            _apiType = "OpenRouter";
-            _apiKey = !string.IsNullOrEmpty(openRouterApiKey) ? openRouterApiKey : envOpenRouterApiKey!;
-            
-            // Get the model from configuration or use a default
-            var configModel = configuration["OpenRouter:Model"];
-            _model = !string.IsNullOrEmpty(configModel) ? configModel : "openrouter/auto";
-            
-            logger.LogInformation("Configuring TradingViewAnalyzer to use OpenRouter with model: {Model}", _model);
-            
-            // Set up HttpClient for OpenRouter
-            _httpClient.BaseAddress = new Uri("https://openrouter.ai/api/v1/");
-            _httpClient.DefaultRequestHeaders.Accept.Clear();
-            _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-            _httpClient.DefaultRequestHeaders.Add("HTTP-Referer", "https://trader.app"); // Required by OpenRouter
-        }
-        else if (!string.IsNullOrEmpty(perplexityApiKey) || !string.IsNullOrEmpty(envPerplexityApiKey))
-        {
-            // Use Perplexity as fallback
-            _apiType = "Perplexity";
-            _apiKey = !string.IsNullOrEmpty(perplexityApiKey) ? perplexityApiKey : envPerplexityApiKey!;
-            
-            // Get the model from configuration or use a default
-            _model = "sonar-pro"; // Default Perplexity model
-            
-            logger.LogInformation("Configuring TradingViewAnalyzer to use Perplexity with model: {Model}", _model);
-            
-            // Set up HttpClient for Perplexity
-            _httpClient.BaseAddress = new Uri("https://api.perplexity.ai/");
-            _httpClient.DefaultRequestHeaders.Accept.Clear();
-            _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-        }
-        else
-        {
-            throw new ArgumentException("Either OpenRouter or Perplexity API key is required");
-        }
-
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-
         _marketSessionService = marketSessionService ?? throw new ArgumentNullException(nameof(marketSessionService));
-
         _positionSizingService = positionSizingService ?? throw new ArgumentNullException(nameof(positionSizingService));
-
+        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         
-        // Initialize _dataProvider to avoid null warning
-        _dataProvider = dataProviderFactory?.GetProvider(providerType ?? DataProviderType.Mock) ?? 
-            throw new ArgumentNullException(nameof(dataProviderFactory));
+        // Get API key from configuration
+        _apiKey = configuration["OpenRouter:ApiKey"] ?? configuration["TRADER_OPENROUTER_API_KEY"] ?? 
+                 configuration["Perplexity:ApiKey"] ?? configuration["TRADER_PERPLEXITY_API_KEY"] ??
+                 throw new ArgumentException("No API key found for OpenRouter or Perplexity");
         
-        // Log the first few characters of the API key for debugging
-        if (!string.IsNullOrEmpty(_apiKey) && _apiKey.Length > 4)
+        // Determine which API we're using
+        if (!string.IsNullOrEmpty(configuration["OpenRouter:ApiKey"]) || !string.IsNullOrEmpty(configuration["TRADER_OPENROUTER_API_KEY"]))
         {
-            _logger.LogInformation("Using {ApiType} API key starting with: {KeyPrefix}...", _apiType, _apiKey.Substring(0, 4));
+            _apiType = "OpenRouter";
+            _model = "anthropic/claude-3-opus:beta";
         }
         else
         {
-            _logger.LogWarning("API key is too short or empty");
+            _apiType = "Perplexity";
+            _model = "mistral-7b-instruct";
         }
 
-        // If a specific provider type is provided, use it
-        if (providerType.HasValue)
-        {
-            _logger.LogInformation("TradingViewAnalyzer using specified {ProviderType} data provider", providerType.Value);
-        }
-        else
-        {
-            // Determine which data provider to use based on configuration
-            DataProviderType defaultProviderType = DataProviderType.Mock;
-            
-            if (!string.IsNullOrEmpty(configuration["Polygon:ApiKey"]))
-            {
-                defaultProviderType = DataProviderType.Polygon;
-                _logger.LogInformation("TradingViewAnalyzer using Polygon data provider");
-            }
-            else if (!string.IsNullOrEmpty(configuration["TraderMade:ApiKey"]))
-            {
-                defaultProviderType = DataProviderType.TraderMade;
-                _logger.LogInformation("TradingViewAnalyzer using TraderMade data provider");
-            }
-            else
-            {
-                _logger.LogInformation("TradingViewAnalyzer using Mock data provider");
-            }
-            
-            // Get the appropriate data provider from the factory
-            _dataProvider = dataProviderFactory.GetProvider(defaultProviderType);
-        }
+        // Get the provider type from configuration
+        var providerType = configuration.GetValue<DataProviderType>("DataProvider:Type", DataProviderType.Mock);
+        
+        // Initialize the data provider
+        _dataProvider = dataProviderFactory.GetProvider(providerType);
+        
+        _logger.LogInformation("Initialized TradingViewAnalyzer with {ProviderType} data provider", providerType);
     }
 
     /// <summary>
@@ -384,18 +310,41 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     /// Provides trading recommendations for multiple assets.
     /// </summary>
     /// <param name="count">Number of recommendations to provide</param>
+    /// <param name="provider">The data provider to use for price data</param>
     /// <returns>List of trading recommendations</returns>
-    public async Task<List<ForexRecommendation>> GetTradingRecommendationsAsync(int count = 3)
+    public async Task<List<ForexRecommendation>> GetTradingRecommendationsAsync(int count = 3, string? provider = null)
     {
         try
         {
-            _logger.LogInformation("Getting {Count} trading recommendations using {ApiType} with model {Model}", count, _apiType, _model);
+            _logger.LogInformation("Getting {Count} trading recommendations using {ApiType} with model {Model} and provider {Provider}", 
+                count, _apiType, _model, provider ?? "default");
             
             // Check if API key is available
             if (string.IsNullOrEmpty(_apiKey))
             {
                 _logger.LogError("API key is missing. Cannot generate recommendations.");
                 throw new InvalidOperationException("API key is required for generating recommendations");
+            }
+
+            // If a specific provider is requested, try to use it
+            IForexDataProvider dataProvider = _dataProvider;
+            if (!string.IsNullOrEmpty(provider))
+            {
+                switch (provider.ToLower())
+                {
+                    case "twelvedata":
+                        dataProvider = _serviceProvider.GetService<TwelveDataProvider>() ?? _dataProvider;
+                        break;
+                    case "tradermade":
+                        dataProvider = _serviceProvider.GetService<TraderMadeDataProvider>() ?? _dataProvider;
+                        break;
+                    case "polygon":
+                        dataProvider = _serviceProvider.GetService<PolygonDataProvider>() ?? _dataProvider;
+                        break;
+                    default:
+                        _logger.LogWarning("Unknown provider {Provider} specified, using default provider", provider);
+                        break;
+                }
             }
             
             // Define a list of common forex pairs to analyze
@@ -406,7 +355,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             };
 
             // Add some crypto pairs if we're using a real data provider
-            if (!(_dataProvider is ForexDataProvider))
+            if (!(dataProvider is ForexDataProvider))
             {
                 commonPairs.AddRange(new[] { "BTCUSD", "ETHUSD" });
             }

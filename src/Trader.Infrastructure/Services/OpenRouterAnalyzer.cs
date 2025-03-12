@@ -153,13 +153,12 @@ public class OpenRouterAnalyzer : ISentimentAnalyzer
     /// Gets recommended forex trading opportunities based on current market conditions.
     /// </summary>
     /// <param name="count">The number of recommendations to return.</param>
+    /// <param name="provider">The data provider to use for price data (optional).</param>
     /// <returns>A list of trading recommendations for the most promising forex pairs.</returns>
-    public async Task<List<ForexRecommendation>> GetTradingRecommendationsAsync(int count = 3)
+    public async Task<List<ForexRecommendation>> GetTradingRecommendationsAsync(int count = 3, string? provider = null)
     {
         try
         {
-            // First, we'll use OpenRouter to get both current market prices and trading recommendations
-
             var prompt = $@"
 You are a forex trading expert. I need you to provide exactly {count} forex trading recommendations with ACCURATE, VERIFIED price data.
 
@@ -180,155 +179,110 @@ STEP 2: Based on these verified prices and your analysis:
 
 STEP 3: Format your entire response as VALID JSON with this exact structure:
 {{
-  ""recommendations"": [
-    {{
-      ""pair"": ""EURUSD"",
-      ""direction"": ""Buy"",
-      ""sentiment"": ""bullish"",
-      ""confidence"": 0.85,
-      ""currentPrice"": 1.09123,
-      ""takeProfitPrice"": 1.09500,
-      ""stopLossPrice"": 1.08900,
-      ""factors"": [
-        ""ECB hawkish stance"",
-        ""Price above 200 EMA"",
-        ""Bullish engulfing pattern on 4H chart""
-      ],
-      ""rationale"": ""EURUSD shows strong bullish momentum with key support at 1.0890"",
-      ""sources"": [
-        ""https://www.example.com/forex/eurusd"",
-        ""https://www.another-source.com/markets/eur-usd""
-      ]
-    }}
-  ]
-}}
-
-CRITICAL: Your response MUST be valid JSON that can be parsed programmatically. Do not include any explanatory text outside the JSON structure. Ensure all decimal values use periods, not commas, as decimal separators.";
+    ""recommendations"": [
+        {{
+            ""pair"": ""EURUSD"",
+            ""direction"": ""Buy"" or ""Sell"",
+            ""sentiment"": ""Bullish"" or ""Bearish"" or ""Neutral"",
+            ""confidence"": 0.0-1.0,
+            ""currentPrice"": decimal,
+            ""takeProfitPrice"": decimal,
+            ""stopLossPrice"": decimal,
+            ""factors"": [""list"", ""of"", ""factors""],
+            ""rationale"": ""detailed explanation"",
+            ""sources"": [""list"", ""of"", ""source"", ""URLs""]
+        }}
+    ]
+}}";
 
             var requestBody = new
             {
                 model = _model,
                 messages = new[]
                 {
-                    new { role = "system", content = "You are a forex trading expert with access to real-time market data. Provide accurate, data-driven trading recommendations with precise price levels. Always verify your information with reliable sources and include citations. Never make up information or sources. Format your responses as valid JSON that can be parsed programmatically." },
+                    new { role = "system", content = @"You are an expert forex trader with access to real-time market data from multiple financial sources. 
+
+KEY RESPONSIBILITIES:
+1. Provide ACCURATE, CURRENT price data that reflects actual market rates
+2. Double-verify all prices from multiple reliable financial sources
+3. Ensure price relationships are logical (e.g., EURUSD ~1.05-1.15, JPY pairs ~100-200)
+4. Calculate reasonable take profit and stop loss levels based on verified prices
+5. Format response as valid JSON that follows the requested structure exactly
+
+YOU MUST:
+- Verify price data is correct and current before submission
+- Format all non-JPY forex pairs to 5 decimal places (e.g., 1.10952)
+- Format JPY pairs to 3 decimal places (e.g., 154.305)
+- Ensure price values reflect their proper magnitude (e.g., USDJPY > 100)
+- Generate only properly formatted JSON with no text outside the JSON structure" },
                     new { role = "user", content = prompt }
                 },
-                temperature = 0.1,
-                max_tokens = 2000
+                temperature = 0.2,
+                max_tokens = 1500
             };
-            
+
             var content = new StringContent(
                 JsonSerializer.Serialize(requestBody),
                 Encoding.UTF8,
                 "application/json");
-                
+
             var response = await _httpClient.PostAsync("chat/completions", content);
             response.EnsureSuccessStatusCode();
-            
+
             var responseString = await response.Content.ReadAsStringAsync();
-            _logger.LogInformation("Received response: {Response}", responseString);
+            _logger.LogDebug("Received response: {Response}", responseString);
             var responseObject = JsonSerializer.Deserialize<OpenRouterResponse>(responseString);
             
             if (responseObject?.choices == null || responseObject.choices.Length == 0)
             {
                 throw new Exception("Invalid response from OpenRouter API");
             }
-            
+
             // Extract the model used from the response
             string modelUsed = !string.IsNullOrEmpty(responseObject.model) ? responseObject.model : _model;
-            _logger.LogInformation("OpenRouter selected model: {Model} for trading recommendations", modelUsed);
-            
+            _logger.LogInformation("OpenRouter selected model: {Model} for recommendations", modelUsed);
+
             // Extract the JSON from the response text
             var responseContent = responseObject.choices[0].message.content;
-            _logger.LogInformation("Message content from OpenRouter: {Content}", responseContent);
-            
-            // Pre-process the response content to help with malformed responses
-            string preprocessedContent = responseContent;
-            
-            // Remove markdown code blocks if present
-            if (preprocessedContent.Contains("```json"))
-            {
-                preprocessedContent = preprocessedContent.Replace("```json", "");
-                preprocessedContent = preprocessedContent.Replace("```", "");
-            }
-            
-            // Handle the case where model returns explanatory text despite instructions
-            var jsonStartIndex = preprocessedContent.IndexOf('{');
-            var jsonEndIndex = preprocessedContent.LastIndexOf('}');
+            var jsonStartIndex = responseContent.IndexOf('{');
+            var jsonEndIndex = responseContent.LastIndexOf('}');
             
             if (jsonStartIndex == -1 || jsonEndIndex == -1)
             {
-                _logger.LogError("Could not find JSON markers in message content: {Content}", preprocessedContent);
-                throw new Exception("Could not extract JSON from recommendations response");
+                throw new Exception("Could not extract JSON from response");
             }
                 
-            var jsonContent = preprocessedContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
+            var jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
+            var recommendationsData = JsonSerializer.Deserialize<RecommendationsData>(jsonContent);
             
-            // Try to clean up common JSON issues
-            jsonContent = jsonContent.Replace("\n", " ")
-                                    .Replace("\r", "")
-                                    .Replace("\t", "")
-                                    .Replace("\\n", " ")
-                                    .Replace("\\r", "")
-                                    .Replace("\\t", "");
-                                    
-            // Attempt to fix trailing commas in arrays and objects
-            jsonContent = System.Text.RegularExpressions.Regex.Replace(jsonContent, ",\\s*}", "}");
-            jsonContent = System.Text.RegularExpressions.Regex.Replace(jsonContent, ",\\s*\\]", "]");
-            _logger.LogInformation("Extracted JSON: {Json}", jsonContent);
-            
-            RecommendationsData? recommendationsData;
-            try
+            if (recommendationsData?.recommendations == null)
             {
-                recommendationsData = JsonSerializer.Deserialize<RecommendationsData>(jsonContent);
+                throw new Exception("Could not parse recommendations data");
             }
-            catch (JsonException ex)
+
+            // Convert the recommendations to ForexRecommendation objects
+            var recommendations = recommendationsData.recommendations.Select(r => new ForexRecommendation
             {
-                _logger.LogError(ex, "Error deserializing recommendations JSON: {Json}", jsonContent);
-                throw new Exception("Could not parse recommendations data", ex);
-            }
-            
-            if (recommendationsData?.recommendations == null || !recommendationsData.recommendations.Any())
-            {
-                throw new Exception("No recommendations found in response");
-            }
-            
-            // Convert to ForexRecommendation objects
-            var forexRecommendations = new List<ForexRecommendation>();
-            foreach (var rec in recommendationsData.recommendations)
-            {
-                var recommendation = new ForexRecommendation
-                {
-                    CurrencyPair = rec.pair,
-                    Direction = rec.direction,
-                    Sentiment = ParseSentiment(rec.sentiment),
-                    Confidence = rec.confidence,
-                    CurrentPrice = rec.currentPrice,
-                    TakeProfitPrice = rec.takeProfitPrice,
-                    StopLossPrice = rec.stopLossPrice,
-                    BestEntryPrice = rec.currentPrice, // Using current price as best entry by default
-                    Factors = rec.factors ?? new List<string>(),
-                    Rationale = rec.rationale,
-                    Sources = rec.sources ?? new List<string>(),
-                    Timestamp = DateTime.UtcNow,
-                    ModelUsed = modelUsed
-                };
-                
-                // Determine order type based on direction
-                recommendation.OrderType = rec.direction.Trim().ToLower() == "buy" 
-                    ? OrderType.MarketBuy 
-                    : OrderType.MarketSell;
-                
-                forexRecommendations.Add(recommendation);
-            }
-            
-            return forexRecommendations;
+                CurrencyPair = r.pair,
+                Direction = r.direction,
+                Sentiment = ParseSentiment(r.sentiment),
+                Confidence = r.confidence,
+                CurrentPrice = r.currentPrice,
+                TakeProfitPrice = r.takeProfitPrice,
+                StopLossPrice = r.stopLossPrice,
+                Factors = r.factors ?? new List<string>(),
+                Rationale = r.rationale,
+                Sources = r.sources ?? new List<string>(),
+                Timestamp = DateTime.UtcNow,
+                ModelUsed = modelUsed
+            }).ToList();
+
+            _logger.LogInformation("Successfully generated {Count} trading recommendations", recommendations.Count);
+            return recommendations;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting trading recommendations");
-            
-            // Return an empty list as fallback
             return new List<ForexRecommendation>();
         }
     }
