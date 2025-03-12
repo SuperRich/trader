@@ -2,6 +2,11 @@ using Trader.Core.Models;
 using Trader.Core.Services;
 using Trader.Infrastructure.Data;
 using Trader.Infrastructure.Services;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
+using System.ComponentModel.DataAnnotations;
 
 namespace Trader.Api;
 
@@ -29,7 +34,28 @@ public class TraderMadeKeyRequest
 // Request model for TwelveData API key
 public class TwelveDataKeyRequest
 {
+    [Required]
     public string ApiKey { get; set; } = string.Empty;
+    public bool SaveToUserSecrets { get; set; } = false;
+}
+
+/// <summary>
+/// Request model for setting the OpenRouter API key
+/// </summary>
+public class OpenRouterKeyRequest
+{
+    [Required]
+    public string ApiKey { get; set; } = string.Empty;
+    public bool SaveToUserSecrets { get; set; } = false;
+}
+
+/// <summary>
+/// Request model for setting the OpenRouter model
+/// </summary>
+public class OpenRouterModelRequest
+{
+    [Required]
+    public string Model { get; set; } = string.Empty;
     public bool SaveToUserSecrets { get; set; } = false;
 }
 
@@ -113,17 +139,29 @@ public class Program
         }
         
         // Register sentiment analyzers
-        if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]) || !string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]))
+        if (!string.IsNullOrEmpty(builder.Configuration["OpenRouter:ApiKey"]) || !string.IsNullOrEmpty(builder.Configuration["TRADER_OPENROUTER_API_KEY"]))
         {
-            // Register TradingViewAnalyzer if any data provider is available
+            // Register OpenRouterAnalyzer if API key is available
+            builder.Services.AddHttpClient<ISentimentAnalyzer, OpenRouterAnalyzer>();
+            Console.WriteLine("Using OpenRouter analyzer");
+        }
+        else if (!string.IsNullOrEmpty(builder.Configuration["Perplexity:ApiKey"]) || !string.IsNullOrEmpty(builder.Configuration["TRADER_PERPLEXITY_API_KEY"]))
+        {
+            // Use Perplexity if OpenRouter is not available but Perplexity is
+            builder.Services.AddHttpClient<ISentimentAnalyzer, PerplexitySentimentAnalyzer>();
+            Console.WriteLine("Using Perplexity sentiment analyzer");
+        }
+        else if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]) || !string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]))
+        {
+            // Register TradingViewAnalyzer if any data provider is available but no sentiment API keys
             builder.Services.AddHttpClient<ISentimentAnalyzer, TradingViewAnalyzer>();
             Console.WriteLine("Using TradingView chart analyzer");
         }
         else
         {
-            // Fallback to Perplexity analyzer
+            // Fallback to Perplexity analyzer even without API key (will throw an error when used)
             builder.Services.AddHttpClient<ISentimentAnalyzer, PerplexitySentimentAnalyzer>();
-            Console.WriteLine("Using Perplexity sentiment analyzer");
+            Console.WriteLine("Using Perplexity sentiment analyzer (no API key provided)");
         }
         
         // Enable CORS
@@ -343,27 +381,72 @@ public class Program
                 logger.LogInformation("Analyzing {Symbol} with TradingView using {Provider} data provider", symbol, provider);
                 
                 // Create a new HttpClient for the analyzer
-                var httpClient = new HttpClient
-                {
-                    BaseAddress = new Uri("https://api.perplexity.ai/")
-                };
+                var httpClient = new HttpClient();
                 httpClient.DefaultRequestHeaders.Accept.Clear();
                 httpClient.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
                 
-                // Get the Perplexity API key
+                // Check for OpenRouter API key first
+                var openRouterApiKey = configuration["OpenRouter:ApiKey"] ?? configuration["TRADER_OPENROUTER_API_KEY"];
                 var perplexityApiKey = configuration["Perplexity:ApiKey"] ?? configuration["TRADER_PERPLEXITY_API_KEY"];
-                if (string.IsNullOrEmpty(perplexityApiKey))
+                
+                logger.LogInformation("Provider-specific endpoint - Available API keys: OpenRouter: {HasOpenRouter}, Perplexity: {HasPerplexity}",
+                    !string.IsNullOrEmpty(openRouterApiKey),
+                    !string.IsNullOrEmpty(perplexityApiKey));
+                
+                string analyzerType = "Perplexity"; // Default
+                string model = ""; // Will store the model name
+                
+                if (!string.IsNullOrEmpty(openRouterApiKey))
                 {
-                    return Results.BadRequest("Perplexity API key is required for analysis");
+                    // Use OpenRouter
+                    httpClient.BaseAddress = new Uri("https://openrouter.ai/api/v1/");
+                    httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", openRouterApiKey);
+                    httpClient.DefaultRequestHeaders.Add("HTTP-Referer", "https://trader.app"); // Required by OpenRouter
+                    analyzerType = "OpenRouter";
+                    
+                    // Get the model from configuration or use a default
+                    model = configuration["OpenRouter:Model"] ?? "openrouter/auto";
+                    logger.LogInformation("Provider-specific endpoint using OpenRouter with model: {Model}", model);
+                }
+                else if (!string.IsNullOrEmpty(perplexityApiKey))
+                {
+                    // Use Perplexity
+                    httpClient.BaseAddress = new Uri("https://api.perplexity.ai/");
+                    httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", perplexityApiKey);
+                    model = "sonar-pro"; // Default Perplexity model
+                    logger.LogInformation("Provider-specific endpoint using Perplexity with model: {Model}", model);
+                }
+                else
+                {
+                    return Results.BadRequest("Either OpenRouter or Perplexity API key is required for analysis");
                 }
                 
-                httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", perplexityApiKey);
+                logger.LogInformation("Provider-specific endpoint using {AnalyzerType} for sentiment analysis", analyzerType);
                 
-                // Create a new analyzer with the specified provider
+                // Create a configuration with the model explicitly set to ensure it's used
+                var configDictionary = new Dictionary<string, string>();
+                if (analyzerType == "OpenRouter")
+                {
+                    configDictionary["OpenRouter:ApiKey"] = openRouterApiKey;
+                    configDictionary["OpenRouter:Model"] = model;
+                    // Don't clear Perplexity key, just ensure OpenRouter is prioritized
+                }
+                else if (analyzerType == "Perplexity")
+                {
+                    configDictionary["Perplexity:ApiKey"] = perplexityApiKey;
+                }
+                
+                // Create a configuration that includes our model setting
+                var configBuilder = new ConfigurationBuilder()
+                    .AddConfiguration(configuration)
+                    .AddInMemory(configDictionary);
+                var combinedConfig = configBuilder.Build();
+                
+                // Create a new analyzer with the specified provider and our combined configuration
                 var analyzer = new TradingViewAnalyzer(
                     providerFactory,
                     httpClient,
-                    configuration,
+                    combinedConfig,
                     loggerFactory.CreateLogger<TradingViewAnalyzer>(),
                     app.Services.GetRequiredService<ForexMarketSessionService>(),
                     app.Services.GetRequiredService<IPositionSizingService>(),
@@ -528,150 +611,141 @@ public class Program
         .WithName("GetTradingRecommendations")
         .WithOpenApi();
         
-        // Diagnostic endpoint to set Perplexity API key directly
-        app.MapPost("/api/diagnostics/set-perplexity-key", 
-            async (KeyRequest request, IConfiguration configuration, ILogger<Program> logger) =>
+        // Endpoint to set OpenRouter API key
+        app.MapPost("/api/config/openrouter-key", 
+            (OpenRouterKeyRequest request, IConfiguration configuration, IWebHostEnvironment env, ILogger<Program> logger) =>
             {
-                if (string.IsNullOrEmpty(request.ApiKey))
-                {
-                    return Results.BadRequest("API key cannot be empty");
-                }
-                
                 try
                 {
-                    // Create a temporary in-memory dictionary for testing this key
-                    var memoryDict = new Dictionary<string, string>
+                    if (string.IsNullOrWhiteSpace(request.ApiKey))
                     {
-                        { "Perplexity:ApiKey", request.ApiKey }
-                    };
-                    
-                    var memoryConfig = new ConfigurationBuilder()
-                        .AddInMemory(memoryDict)
-                        .Build();
-                    
-                    var httpClient = new HttpClient();
-                    httpClient.DefaultRequestHeaders.Authorization = 
-                        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", request.ApiKey);
-                        
-                    // Make a test request to Perplexity API
-                    var testRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.perplexity.ai/chat/completions")
-                    {
-                        Content = new StringContent(
-                            System.Text.Json.JsonSerializer.Serialize(new
-                            {
-                                model = "sonar", // Current Perplexity model
-                                messages = new[] 
-                                { 
-                                    new { role = "system", content = "You are a helpful assistant." },
-                                    new { role = "user", content = "Hello, please respond with a single word." } 
-                                },
-                                temperature = 0.1,
-                                max_tokens = 100
-                            }),
-                            System.Text.Encoding.UTF8,
-                            "application/json")
-                    };
-                    
-                    logger.LogInformation("Testing Perplexity API with key starting with {KeyPrefix}", 
-                        request.ApiKey.Length > 4 ? request.ApiKey[..4] + "..." : "too short");
-                    
-                    testRequest.Headers.Authorization = 
-                        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", request.ApiKey);
-                    
-                    var response = await httpClient.SendAsync(testRequest);
-                    var responseContent = await response.Content.ReadAsStringAsync();
-                    
-                    logger.LogInformation("Perplexity API response: Status: {Status}, Content: {Content}", 
-                        response.StatusCode, responseContent);
-                        
-                    var isValid = response.IsSuccessStatusCode;
-                    var statusMessage = isValid 
-                        ? "Valid API key" 
-                        : $"Invalid API key: {response.StatusCode}. Response: {responseContent}";
-                    
-                    // Only save the key if it's valid and user wants to save
-                    if (isValid && request.SaveToUserSecrets)
-                    {
-                        try
-                        {
-                            // Try to save to user secrets first
-                            var userSecretsId = "trader-app-secrets-id";
-                            var userSecretsPath = Path.Combine(
-                                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                                "Microsoft", "UserSecrets", userSecretsId);
-                                
-                            Directory.CreateDirectory(userSecretsPath);
-                            
-                            var secretsFilePath = Path.Combine(userSecretsPath, "secrets.json");
-                            var secrets = new Dictionary<string, string>
-                            {
-                                { "Perplexity:ApiKey", request.ApiKey }
-                            };
-                            
-                            await File.WriteAllTextAsync(
-                                secretsFilePath, 
-                                System.Text.Json.JsonSerializer.Serialize(secrets, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-                                
-                            logger.LogInformation("Saved valid API key to user secrets at {Path}", secretsFilePath);
-                            
-                            // Also create a .env file in the current directory as a backup
-                            var envFilePath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
-                            await File.WriteAllTextAsync(envFilePath, $"TRADER_PERPLEXITY_API_KEY={request.ApiKey}");
-                            logger.LogInformation("Also saved API key to .env file at {Path}", envFilePath);
-                            
-                            // Direct update in appsettings.Development.json if it exists
-                            var appSettingsDevPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.Development.json");
-                            if (File.Exists(appSettingsDevPath))
-                            {
-                                try
-                                {
-                                    var json = await File.ReadAllTextAsync(appSettingsDevPath);
-                                    
-                                    // Simple JSON replacement - not ideal but works for this quick fix
-                                    if (json.Contains("\"Perplexity\": {"))
-                                    {
-                                        var updated = System.Text.RegularExpressions.Regex.Replace(
-                                            json,
-                                            "\"ApiKey\":\\s*\"[^\"]*\"",
-                                            $"\"ApiKey\": \"{request.ApiKey}\"");
-                                            
-                                        await File.WriteAllTextAsync(appSettingsDevPath, updated);
-                                        logger.LogInformation("Updated API key in {Path}", appSettingsDevPath);
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    logger.LogWarning(ex, "Failed to update appsettings.Development.json");
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogWarning(ex, "Failed to save API key to some locations");
-                        }
+                        return Results.BadRequest("API key is required");
                     }
                     
-                    return Results.Ok(new 
-                    { 
-                        IsValid = isValid,
-                        StatusMessage = statusMessage,
-                        SavedToUserSecrets = isValid && request.SaveToUserSecrets,
-                        RequestToPerplexity = new {
-                            Model = "sonar",
-                            Messages = new[] 
-                            { 
-                                new { Role = "system", Content = "You are a helpful assistant." },
-                                new { Role = "user", Content = "Hello, please respond with a single word." } 
+                    // Create a dictionary to hold the new configuration
+                    var configValues = new Dictionary<string, string>
+                    {
+                        { "OpenRouter:ApiKey", request.ApiKey }
+                    };
+                    
+                    // Add the configuration to the current configuration
+                    var configBuilder = new ConfigurationBuilder()
+                        .AddConfiguration(configuration)
+                        .AddInMemory(configValues);
+                    
+                    var newConfig = configBuilder.Build();
+                    
+                    // Update the configuration
+                    ((IConfigurationRoot)configuration).Reload();
+                    
+                    // Save to user secrets if requested and in development
+                    if (request.SaveToUserSecrets && env.IsDevelopment())
+                    {
+                        var secretsFilePath = Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "Microsoft", "UserSecrets", 
+                            "aspnet-Trader-Api-53bc9b9d-9d6a-45d4-8429-2a2761773502", 
+                            "secrets.json");
+                        
+                        Dictionary<string, string> secrets = new();
+                        
+                        if (File.Exists(secretsFilePath))
+                        {
+                            var existingSecrets = File.ReadAllText(secretsFilePath);
+                            if (!string.IsNullOrEmpty(existingSecrets))
+                            {
+                                secrets = JsonSerializer.Deserialize<Dictionary<string, string>>(existingSecrets) ?? new Dictionary<string, string>();
                             }
                         }
-                    });
+                        
+                        secrets["OpenRouter:ApiKey"] = request.ApiKey;
+                        
+                        Directory.CreateDirectory(Path.GetDirectoryName(secretsFilePath)!);
+                        File.WriteAllText(secretsFilePath, JsonSerializer.Serialize(secrets, new JsonSerializerOptions { WriteIndented = true }));
+                        
+                        logger.LogInformation("OpenRouter API key saved to user secrets");
+                    }
+                    
+                    logger.LogInformation("OpenRouter API key set successfully");
+                    
+                    return Results.Ok(new { Message = "OpenRouter API key set successfully" });
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex, "Error testing API key");
-                    return Results.Problem($"Error testing API key: {ex.Message}");
+                    logger.LogError(ex, "Error setting OpenRouter API key");
+                    return Results.Problem("Error setting OpenRouter API key: " + ex.Message);
                 }
-            });
+            })
+        .WithName("SetOpenRouterApiKey")
+        .WithOpenApi();
+        
+        // Endpoint to set OpenRouter model
+        app.MapPost("/api/config/openrouter-model", 
+            (OpenRouterModelRequest request, IConfiguration configuration, IWebHostEnvironment env, ILogger<Program> logger) =>
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(request.Model))
+                    {
+                        return Results.BadRequest("Model name is required");
+                    }
+                    
+                    // Create a dictionary to hold the new configuration
+                    var configValues = new Dictionary<string, string>
+                    {
+                        { "OpenRouter:Model", request.Model }
+                    };
+                    
+                    // Add the configuration to the current configuration
+                    var configBuilder = new ConfigurationBuilder()
+                        .AddConfiguration(configuration)
+                        .AddInMemory(configValues);
+                    
+                    var newConfig = configBuilder.Build();
+                    
+                    // Update the configuration
+                    ((IConfigurationRoot)configuration).Reload();
+                    
+                    // Save to user secrets if requested and in development
+                    if (request.SaveToUserSecrets && env.IsDevelopment())
+                    {
+                        var secretsFilePath = Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "Microsoft", "UserSecrets", 
+                            "aspnet-Trader-Api-53bc9b9d-9d6a-45d4-8429-2a2761773502", 
+                            "secrets.json");
+                        
+                        Dictionary<string, string> secrets = new();
+                        
+                        if (File.Exists(secretsFilePath))
+                        {
+                            var existingSecrets = File.ReadAllText(secretsFilePath);
+                            if (!string.IsNullOrEmpty(existingSecrets))
+                            {
+                                secrets = JsonSerializer.Deserialize<Dictionary<string, string>>(existingSecrets) ?? new Dictionary<string, string>();
+                            }
+                        }
+                        
+                        secrets["OpenRouter:Model"] = request.Model;
+                        
+                        Directory.CreateDirectory(Path.GetDirectoryName(secretsFilePath)!);
+                        File.WriteAllText(secretsFilePath, JsonSerializer.Serialize(secrets, new JsonSerializerOptions { WriteIndented = true }));
+                        
+                        logger.LogInformation("OpenRouter model saved to user secrets");
+                    }
+                    
+                    logger.LogInformation("OpenRouter model set to: {Model}", request.Model);
+                    
+                    return Results.Ok(new { Message = $"OpenRouter model set to: {request.Model}" });
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error setting OpenRouter model");
+                    return Results.Problem("Error setting OpenRouter model: " + ex.Message);
+                }
+            })
+        .WithName("SetOpenRouterModel")
+        .WithOpenApi();
         
         // Endpoint to set Polygon.io API key
         app.MapPost("/api/diagnostics/set-polygon-key", 
@@ -1166,16 +1240,20 @@ public class Program
                 var polygonApiKey = configuration["Polygon:ApiKey"] ?? configuration["TRADER_POLYGON_API_KEY"];
                 var tradermadeApiKey = configuration["TraderMade:ApiKey"] ?? configuration["TRADER_TRADERMADE_API_KEY"];
                 var twelvedataApiKey = configuration["TwelveData:ApiKey"] ?? configuration["TRADER_TWELVEDATA_API_KEY"];
+                var openrouterApiKey = configuration["OpenRouter:ApiKey"] ?? configuration["TRADER_OPENROUTER_API_KEY"];
+                var openrouterModel = configuration["OpenRouter:Model"] ?? "anthropic/claude-3-opus:beta"; // Default model
                 
                 var hasPerplexity = !string.IsNullOrEmpty(perplexityApiKey);
                 var hasPolygon = !string.IsNullOrEmpty(polygonApiKey);
                 var hasTraderMade = !string.IsNullOrEmpty(tradermadeApiKey);
                 var hasTwelveData = !string.IsNullOrEmpty(twelvedataApiKey);
+                var hasOpenRouter = !string.IsNullOrEmpty(openrouterApiKey);
                 
-                logger.LogInformation("Configuration check: Perplexity API key: {HasKey}, Polygon API key: {HasPolygon}, TraderMade API key: {HasTraderMade}, TwelveData API key: {HasTwelveData}",
-                    hasPerplexity, hasPolygon, hasTraderMade, hasTwelveData);
+                logger.LogInformation("Configuration check: Perplexity API key: {HasKey}, Polygon API key: {HasPolygon}, TraderMade API key: {HasTraderMade}, TwelveData API key: {HasTwelveData}, OpenRouter API key: {HasOpenRouter}",
+                    hasPerplexity, hasPolygon, hasTraderMade, hasTwelveData, hasOpenRouter);
                 
                 var defaultProvider = hasPolygon ? "Polygon" : hasTraderMade ? "TraderMade" : hasTwelveData ? "TwelveData" : "Mock";
+                var defaultSentimentAnalyzer = hasOpenRouter ? "OpenRouter" : hasPerplexity ? "Perplexity" : "None";
                 
                 return Results.Ok(new
                 {
@@ -1183,7 +1261,10 @@ public class Program
                     HasPolygonApiKey = hasPolygon,
                     HasTraderMadeApiKey = hasTraderMade,
                     HasTwelveDataApiKey = hasTwelveData,
+                    HasOpenRouterApiKey = hasOpenRouter,
                     DefaultDataProvider = defaultProvider,
+                    DefaultSentimentAnalyzer = defaultSentimentAnalyzer,
+                    OpenRouterModel = openrouterModel,
                     PerplexityKeyPrefix = hasPerplexity && !string.IsNullOrEmpty(perplexityApiKey) && perplexityApiKey.Length > 4 
                         ? perplexityApiKey.Substring(0, 4) + "..." 
                         : null,
@@ -1195,6 +1276,9 @@ public class Program
                         : null,
                     TwelveDataKeyPrefix = hasTwelveData && !string.IsNullOrEmpty(twelvedataApiKey) && twelvedataApiKey.Length > 4 
                         ? twelvedataApiKey.Substring(0, 4) + "..." 
+                        : null,
+                    OpenRouterKeyPrefix = hasOpenRouter && !string.IsNullOrEmpty(openrouterApiKey) && openrouterApiKey.Length > 4 
+                        ? openrouterApiKey.Substring(0, 4) + "..." 
                         : null
                 });
             })

@@ -125,6 +125,11 @@ public class SentimentAnalysisResult
     public DateTime Timestamp { get; set; }
     
     /// <summary>
+    /// The model used for the analysis (e.g., "anthropic/claude-3-opus:beta", "openai/gpt-4o").
+    /// </summary>
+    public string ModelUsed { get; set; } = string.Empty;
+    
+    /// <summary>
     /// The current price at the time of analysis.
     /// </summary>
     public decimal CurrentPrice { get; set; }
@@ -312,47 +317,51 @@ public class ForexRecommendation
     public decimal BestEntryPrice { get; set; }
     
     /// <summary>
+    /// The model used for the analysis (e.g., "anthropic/claude-3-opus:beta", "openai/gpt-4o").
+    /// </summary>
+    public string ModelUsed { get; set; } = string.Empty;
+    
+    /// <summary>
     /// Potential risk-reward ratio for this trade.
     /// </summary>
     public decimal RiskRewardRatio 
-    { 
+    {
         get
         {
-            // Handle cases where values are 0 or denominator would be 0
-            if (CurrentPrice == 0 || StopLossPrice == 0 || TakeProfitPrice == 0 || CurrentPrice == StopLossPrice)
-                return 0;
-                
-            // Calculate reward (distance to take profit)
-            decimal reward = Math.Abs(TakeProfitPrice - CurrentPrice);
+            if (Direction.Equals("Buy", StringComparison.OrdinalIgnoreCase) && 
+                TakeProfitPrice > CurrentPrice && 
+                StopLossPrice < CurrentPrice)
+            {
+                return Math.Round((TakeProfitPrice - CurrentPrice) / (CurrentPrice - StopLossPrice), 2);
+            }
+            else if (Direction.Equals("Sell", StringComparison.OrdinalIgnoreCase) && 
+                     TakeProfitPrice < CurrentPrice && 
+                     StopLossPrice > CurrentPrice)
+            {
+                return Math.Round((CurrentPrice - TakeProfitPrice) / (StopLossPrice - CurrentPrice), 2);
+            }
             
-            // Calculate risk (distance to stop loss)
-            decimal risk = Math.Abs(CurrentPrice - StopLossPrice);
-            
-            // Avoid division by zero
-            if (risk == 0)
-                return 0;
-                
-            return reward / risk;
+            return 0;
         }
     }
     
     /// <summary>
-    /// Key factors supporting this recommendation.
+    /// Factors supporting this recommendation.
     /// </summary>
     public List<string> Factors { get; set; } = new List<string>();
     
     /// <summary>
-    /// Brief trading rationale.
+    /// Detailed rationale for this recommendation.
     /// </summary>
     public string Rationale { get; set; } = string.Empty;
     
     /// <summary>
-    /// List of source URLs for the data used in this recommendation.
+    /// Sources cited in the analysis.
     /// </summary>
     public List<string> Sources { get; set; } = new List<string>();
     
     /// <summary>
-    /// Timestamp of when this recommendation was generated.
+    /// The timestamp when the recommendation was generated.
     /// </summary>
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     
