@@ -108,19 +108,19 @@ public class Program
         if (!string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]))
         {
             builder.Services.AddHttpClient<IForexDataProvider, TraderMadeDataProvider>();
-            builder.Services.AddScoped<TraderMadeDataProvider>();
+            builder.Services.AddSingleton<TraderMadeDataProvider>();
             Console.WriteLine("Using TraderMade as default data provider");
         }
         else if (!string.IsNullOrEmpty(builder.Configuration["TwelveData:ApiKey"]))
         {
             builder.Services.AddHttpClient<IForexDataProvider, TwelveDataProvider>();
-            builder.Services.AddScoped<TwelveDataProvider>();
+            builder.Services.AddSingleton<TwelveDataProvider>();
             Console.WriteLine("Using TwelveData as default data provider");
         }
         else if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
         {
             builder.Services.AddHttpClient<IForexDataProvider, PolygonDataProvider>();
-            builder.Services.AddScoped<PolygonDataProvider>();
+            builder.Services.AddSingleton<PolygonDataProvider>();
             Console.WriteLine("Using Polygon as default data provider");
         }
         else
@@ -134,20 +134,20 @@ public class Program
             builder.Configuration["TwelveData:ApiKey"] != builder.Configuration["TraderMade:ApiKey"])
         {
             builder.Services.AddHttpClient<TwelveDataProvider>();
-            builder.Services.AddScoped<TwelveDataProvider>();
+            builder.Services.AddSingleton<TwelveDataProvider>();
         }
         
         if (!string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]) && 
             builder.Configuration["TraderMade:ApiKey"] != builder.Configuration["TwelveData:ApiKey"])
         {
             builder.Services.AddHttpClient<TraderMadeDataProvider>();
-            builder.Services.AddScoped<TraderMadeDataProvider>();
+            builder.Services.AddSingleton<TraderMadeDataProvider>();
         }
         
         if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
         {
             builder.Services.AddHttpClient<PolygonDataProvider>();
-            builder.Services.AddScoped<PolygonDataProvider>();
+            builder.Services.AddSingleton<PolygonDataProvider>();
         }
         
         // Register sentiment analyzers

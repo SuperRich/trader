@@ -25,13 +25,6 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     private readonly IPositionSizingService _positionSizingService;
     private readonly IServiceProvider _serviceProvider;
 
-    // Cache for recent analysis results to ensure consistency between endpoints
-    private readonly Dictionary<string, (SentimentAnalysisResult Result, DateTime Timestamp)> _analysisCache = 
-        new Dictionary<string, (SentimentAnalysisResult, DateTime)>(StringComparer.OrdinalIgnoreCase);
-
-    // Cache expiration time (5 minutes)
-    private readonly TimeSpan _cacheExpiration = TimeSpan.FromMinutes(5);
-
     /// <summary>
     /// Constructor for TradingViewAnalyzer
     /// </summary>
@@ -86,21 +79,6 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         try
         {
             _logger.LogInformation("Analyzing sentiment for {Symbol} using {ApiType} with model {Model}", symbol, _apiType, _model);
-            
-            // Check if we have a recent cached result
-            if (_analysisCache.TryGetValue(symbol, out var cachedResult))
-            {
-                if (DateTime.UtcNow - cachedResult.Timestamp < _cacheExpiration)
-                {
-                    _logger.LogInformation("Using cached analysis result for {Symbol} from {Timestamp}", 
-                        symbol, cachedResult.Timestamp);
-                    return cachedResult.Result;
-                }
-                else
-                {
-                    _logger.LogInformation("Cached analysis for {Symbol} expired, performing new analysis", symbol);
-                }
-            }
             
             // Check if we're using TraderMade or TwelveData provider to adjust candle counts
             bool isTraderMade = _dataProvider is TraderMadeDataProvider;
@@ -264,18 +242,6 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                         }
                     }
                     
-                    // Store the result in the cache
-                    _analysisCache[symbol] = (result, DateTime.UtcNow);
-                    
-                    _logger.LogInformation(
-                        "Analysis for {Symbol}: {Sentiment} ({Confidence:P0}), Trade: {Trade}, Current Session: {Session} (Liquidity: {Liquidity}/5)",
-                        symbol,
-                        result.Sentiment,
-                        result.Confidence,
-                        result.TradeRecommendation,
-                        result.MarketSession.CurrentSession,
-                        result.MarketSession.LiquidityLevel);
-                    
                     // Add position sizing calculations
                     result.PositionSizing = await _positionSizingService.CalculatePositionSizingAsync(
                         symbol,
@@ -380,47 +346,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                 {
                     _logger.LogInformation("Analyzing {Pair} for trading recommendation", pair);
                     
-                    // Check if we have a recent analysis for this pair and use it instead of doing a new analysis
-                    if (_analysisCache.TryGetValue(pair, out var cachedResult) && 
-                        DateTime.UtcNow - cachedResult.Timestamp < _cacheExpiration)
-                    {
-                        _logger.LogInformation("Using cached analysis for {Pair} from {Timestamp}", 
-                            pair, cachedResult.Timestamp);
-                        
-                        // Convert the sentiment analysis to a recommendation
-                        var recommendation = ConvertAnalysisToRecommendation(cachedResult.Result);
-                        
-                        // Add to all recommendations list regardless of R:R ratio
-                        allRecommendations.Add(recommendation);
-                        
-                        // Only add to good recommendations if the risk-reward ratio is reasonable (at least 1.5)
-                        if (recommendation.RiskRewardRatio >= 1.5m)
-                        {
-                            goodRecommendations.Add(recommendation);
-                            
-                            _logger.LogInformation(
-                                "Added good recommendation from cache for {Symbol}: {Direction} at {Price}, R:R {RiskReward}, Sentiment: {Sentiment}",
-                                recommendation.CurrencyPair,
-                                recommendation.Direction,
-                                recommendation.CurrentPrice,
-                                recommendation.RiskRewardRatio,
-                                recommendation.Sentiment);
-                        }
-                        else
-                        {
-                            _logger.LogInformation(
-                                "Added recommendation with low R:R from cache for {Symbol}: {Direction} at {Price}, R:R {RiskReward}, Sentiment: {Sentiment}",
-                                recommendation.CurrencyPair,
-                                recommendation.Direction,
-                                recommendation.CurrentPrice,
-                                recommendation.RiskRewardRatio,
-                                recommendation.Sentiment);
-                        }
-                        
-                        continue; // Skip to the next pair
-                    }
-                    
-                    // If no cached result, perform a full analysis
+                    // Perform a full analysis
                     SentimentAnalysisResult analysisResult = await AnalyzeSentimentAsync(pair);
                     
                     // Convert the sentiment analysis to a recommendation
@@ -455,72 +381,31 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Error analyzing {Pair} for recommendations", pair);
-                    // Continue with other pairs
+                    _logger.LogError(ex, "Error analyzing {Pair}", pair);
+                    continue;
                 }
                 
-                // If we have enough good recommendations, stop
+                // If we have enough good recommendations, stop analyzing more pairs
                 if (goodRecommendations.Count >= count)
                 {
                     break;
                 }
             }
-
-            List<ForexRecommendation> finalRecommendations;
             
-            // Prioritize good recommendations, but fall back to all recommendations if needed
-            if (goodRecommendations.Count >= count)
-            {
-                _logger.LogInformation("Found {Count} good recommendations with R:R >= 1.5", goodRecommendations.Count);
-                finalRecommendations = goodRecommendations
-                    .OrderByDescending(r => r.Confidence)
+            // Return the best recommendations we found, preferring those with good R:R ratios
+            var finalRecommendations = goodRecommendations.Count >= count
+                ? goodRecommendations.Take(count).ToList()
+                : goodRecommendations.Concat(allRecommendations.Where(r => !goodRecommendations.Contains(r)))
                     .Take(count)
                     .ToList();
-            }
-            else if (allRecommendations.Count > 0)
-            {
-                _logger.LogInformation("Using {GoodCount} good recommendations and {LowCount} lower-quality recommendations to meet requested count", 
-                    goodRecommendations.Count, Math.Max(0, count - goodRecommendations.Count));
-                    
-                // Start with good recommendations
-                finalRecommendations = new List<ForexRecommendation>(goodRecommendations);
-                
-                // Add lower quality recommendations if needed to reach the requested count
-                if (finalRecommendations.Count < count)
-                {
-                    var remainingNeeded = count - finalRecommendations.Count;
-                    var lowerQualityRecs = allRecommendations
-                        .Where(r => !goodRecommendations.Any(g => g.CurrencyPair == r.CurrencyPair))
-                        .OrderByDescending(r => r.RiskRewardRatio)
-                        .ThenByDescending(r => r.Confidence)
-                        .Take(remainingNeeded)
-                        .ToList();
-                        
-                    finalRecommendations.AddRange(lowerQualityRecs);
-                }
-            }
-            else
-            {
-                _logger.LogWarning("No trading opportunities found. Creating fallback recommendation.");
-                
-                // Create a fallback recommendation if we couldn't get any
-                var fallbackRec = CreateFallbackRecommendation();
-                finalRecommendations = new List<ForexRecommendation> { fallbackRec };
-            }
-
-            // Log the model being used
-            _logger.LogInformation("{ApiType} using model: {Model} for trading recommendations", _apiType, _model);
-
+            
+            _logger.LogInformation("Returning {Count} recommendations", finalRecommendations.Count);
             return finalRecommendations;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting trading recommendations");
-            
-            // Return a fallback recommendation
-            var fallback = CreateFallbackRecommendation();
-            fallback.ModelUsed = "Error - model information unavailable";
-            return new List<ForexRecommendation> { fallback };
+            return new List<ForexRecommendation>();
         }
     }
 
