@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Trader.Core.Models;
 using Trader.Core.Services;
 using System.Text;
+using Trader.Infrastructure.Data;
 
 namespace Trader.Infrastructure.Services;
 
@@ -372,40 +373,41 @@ public class MarketMoversService : IMarketMoversService
             var cachedPairs = _volatilityCache.Keys
                 .Where(k => _commonForexPairs.Contains(k))
                 .OrderByDescending(k => _volatilityCache[k])
-                .Take(Math.Min(_commonForexPairs.Length, count * 2)) // Use 2x instead of 3x
+                .Take(count) // Only take exactly what we need
                 .ToArray();
             
             // If we have enough cached pairs, return them
-            if (cachedPairs.Length >= Math.Min(count * 2, _commonForexPairs.Length))
+            if (cachedPairs.Length >= count)
             {
                 return cachedPairs;
             }
             
-            // Otherwise, add some random pairs to ensure diversity
+            // Otherwise, add some random pairs to reach the requested count
             var remainingPairs = _commonForexPairs
                 .Where(p => !cachedPairs.Contains(p))
                 .OrderBy(_ => Guid.NewGuid()) // Randomize
-                .Take(Math.Min(_commonForexPairs.Length, count * 2) - cachedPairs.Length)
+                .Take(count - cachedPairs.Length)
                 .ToArray();
             
             return cachedPairs.Concat(remainingPairs).ToArray();
         }
         
-        // If we don't have volatility data, use a smaller subset of common pairs
-        // For the first request, we'll analyze fewer pairs to reduce API calls
-        int pairsToAnalyze = Math.Min(_commonForexPairs.Length, Math.Max(count * 2, 10));
-        
-        // Start with the most commonly traded pairs
+        // If we don't have volatility data, just return the most commonly traded pairs up to the requested count
         var commonPairs = new[] { "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD" };
         
-        // Add some random pairs to ensure diversity
-        var randomPairs = _commonForexPairs
+        if (count <= commonPairs.Length)
+        {
+            return commonPairs.Take(count).ToArray();
+        }
+        
+        // If we need more pairs than the common ones, add some random pairs
+        var additionalPairs = _commonForexPairs
             .Where(p => !commonPairs.Contains(p))
             .OrderBy(_ => Guid.NewGuid()) // Randomize
-            .Take(pairsToAnalyze - commonPairs.Length)
+            .Take(count - commonPairs.Length)
             .ToArray();
         
-        return commonPairs.Concat(randomPairs).ToArray();
+        return commonPairs.Take(count).Concat(additionalPairs).ToArray();
     }
     
     /// <summary>
@@ -493,18 +495,67 @@ public class MarketMoversService : IMarketMoversService
             return result;
         }
         
-        // TODO: Implement batch fetching if the provider supports it
-        // For now, fetch each symbol individually
-        foreach (var symbol in symbolsToFetch)
+        // If using TraderMade, we can batch the live rate requests
+        if (dataProvider is TraderMadeDataProvider traderMadeProvider)
         {
             try
             {
-                result[symbol] = await GetCandleDataAsync(symbol, timeframe, count, dataProvider);
+                // Fetch historical data for each symbol
+                foreach (var symbol in symbolsToFetch)
+                {
+                    try
+                    {
+                        var candles = await dataProvider.GetCandleDataAsync(symbol, timeframe, count);
+                        result[symbol] = candles;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error fetching historical data for {Symbol}", symbol);
+                        result[symbol] = new List<CandleData>();
+                    }
+                }
+                
+                // Batch fetch live rates for all symbols
+                var liveRates = await traderMadeProvider.GetLiveBatchRatesAsync(symbolsToFetch.ToArray());
+                
+                // Update the last candle with live rates
+                foreach (var symbol in symbolsToFetch)
+                {
+                    if (liveRates.TryGetValue(symbol, out var liveRate) && result[symbol].Count > 0)
+                    {
+                        var lastCandle = result[symbol].Last();
+                        var updatedCandle = new CandleData
+                        {
+                            Timestamp = lastCandle.Timestamp,
+                            Open = lastCandle.Open,
+                            High = Math.Max(lastCandle.High, liveRate.Mid),
+                            Low = Math.Min(lastCandle.Low, liveRate.Mid),
+                            Close = liveRate.Mid,
+                            Volume = lastCandle.Volume
+                        };
+                        result[symbol][result[symbol].Count - 1] = updatedCandle;
+                    }
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error fetching candle data for {Symbol}", symbol);
-                result[symbol] = new List<CandleData>();
+                _logger.LogError(ex, "Error batch fetching live rates from TraderMade");
+            }
+        }
+        else
+        {
+            // For other providers, fetch each symbol individually
+            foreach (var symbol in symbolsToFetch)
+            {
+                try
+                {
+                    result[symbol] = await GetCandleDataAsync(symbol, timeframe, count, dataProvider);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error fetching candle data for {Symbol}", symbol);
+                    result[symbol] = new List<CandleData>();
+                }
             }
         }
         

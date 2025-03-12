@@ -38,35 +38,43 @@ public class TraderMadeDataProvider : IForexDataProvider
     }
 
     /// <summary>
-    /// Gets live rate data for a specific symbol
+    /// Gets live rates for multiple symbols in a single API call
     /// </summary>
-    /// <param name="symbol">The symbol to get data for (e.g., "EURUSD", "BTCUSD")</param>
-    /// <returns>The current price data</returns>
-    public async Task<LiveRateData> GetLiveRateAsync(string symbol)
+    public async Task<Dictionary<string, LiveRateData>> GetLiveBatchRatesAsync(string[] symbols)
     {
-        string formattedSymbol = FormatSymbolForTraderMade(symbol);
+        // Format all symbols
+        var formattedSymbols = symbols.Select(s => FormatSymbolForTraderMade(s));
+        var symbolList = string.Join(",", formattedSymbols);
         
-        // Check cache first
-        if (_liveRateCache.TryGetValue(formattedSymbol, out var cachedData))
+        // Check cache first for all symbols
+        var result = new Dictionary<string, LiveRateData>();
+        var uncachedSymbols = new List<string>();
+        
+        foreach (var symbol in symbols)
         {
-            if (DateTime.UtcNow - cachedData.Timestamp < _liveCacheExpiration)
+            var formattedSymbol = FormatSymbolForTraderMade(symbol);
+            if (_liveRateCache.TryGetValue(formattedSymbol, out var cachedData))
             {
-                _logger.LogInformation("Using cached live rate for {Symbol} from {Timestamp}", 
-                    symbol, cachedData.Timestamp);
-                return cachedData.Data;
+                if (DateTime.UtcNow - cachedData.Timestamp < _liveCacheExpiration)
+                {
+                    _logger.LogInformation("Using cached live rate for {Symbol} from {Timestamp}", 
+                        symbol, cachedData.Timestamp);
+                    result[symbol] = cachedData.Data;
+                    continue;
+                }
             }
-            else
-            {
-                _logger.LogInformation("Cached live rate for {Symbol} expired, fetching new data", symbol);
-            }
+            uncachedSymbols.Add(symbol);
         }
         
-        _logger.LogInformation("Fetching TraderMade live rate for {Symbol}", symbol);
+        if (uncachedSymbols.Count == 0)
+        {
+            return result;
+        }
         
         // Build the API endpoint URL for live rates
-        string endpoint = $"/api/v1/live?currency={formattedSymbol}&api_key={_apiKey}";
+        string endpoint = $"/api/v1/live?currency={symbolList}&api_key={_apiKey}";
         
-        _logger.LogInformation("Using TraderMade live endpoint: {Endpoint}", endpoint);
+        _logger.LogInformation("Using TraderMade live endpoint for batch request: {Endpoint}", endpoint);
         
         // Make the API request
         var response = await _httpClient.GetAsync(endpoint);
@@ -87,26 +95,44 @@ public class TraderMadeDataProvider : IForexDataProvider
         
         if (liveResponse?.quotes == null || liveResponse.quotes.Length == 0)
         {
-            _logger.LogWarning("No live rate results returned from TraderMade for {Symbol}", symbol);
-            throw new InvalidOperationException($"No live rate data returned from TraderMade for symbol {symbol}");
+            _logger.LogWarning("No live rate results returned from TraderMade for batch request");
+            throw new InvalidOperationException($"No live rate data returned from TraderMade for batch request");
         }
         
-        // Extract the quote for the requested symbol
-        var quote = liveResponse.quotes[0];
-        
-        var liveRateData = new LiveRateData
+        // Process each quote
+        foreach (var quote in liveResponse.quotes)
         {
-            Symbol = symbol,
-            Bid = quote.bid,
-            Ask = quote.ask,
-            Mid = quote.mid,
-            Timestamp = DateTimeOffset.FromUnixTimeSeconds(liveResponse.timestamp).DateTime
-        };
+            var symbol = $"{quote.base_currency}{quote.quote_currency}";
+            var liveRateData = new LiveRateData
+            {
+                Symbol = symbol,
+                Bid = quote.bid,
+                Ask = quote.ask,
+                Mid = quote.mid,
+                Timestamp = DateTimeOffset.FromUnixTimeSeconds(liveResponse.timestamp).DateTime
+            };
+            
+            // Update cache
+            _liveRateCache[FormatSymbolForTraderMade(symbol)] = (liveRateData, DateTime.UtcNow);
+            result[symbol] = liveRateData;
+        }
         
-        // Update cache
-        _liveRateCache[formattedSymbol] = (liveRateData, DateTime.UtcNow);
-        
-        return liveRateData;
+        return result;
+    }
+
+    /// <summary>
+    /// Gets live rate data for a specific symbol
+    /// </summary>
+    /// <param name="symbol">The symbol to get data for (e.g., "EURUSD", "BTCUSD")</param>
+    /// <returns>The current price data</returns>
+    public async Task<LiveRateData> GetLiveRateAsync(string symbol)
+    {
+        var results = await GetLiveBatchRatesAsync(new[] { symbol });
+        if (!results.TryGetValue(symbol, out var rate))
+        {
+            throw new InvalidOperationException($"No live rate data returned from TraderMade for symbol {symbol}");
+        }
+        return rate;
     }
 
     /// <summary>
