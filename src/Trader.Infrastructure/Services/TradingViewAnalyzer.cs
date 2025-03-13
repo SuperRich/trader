@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Trader.Core.Models;
 using Trader.Core.Services;
 using Trader.Infrastructure.Data;
+using System.Text.Json.Serialization;
 
 namespace Trader.Infrastructure.Services;
 
@@ -239,18 +240,34 @@ Always verify your information with reliable sources and include citations. Be a
             try
             {
                 var requestContent = await request.Content.ReadAsStringAsync();
-                var directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ApiLogs");
-                Directory.CreateDirectory(directory);
+                
+                // Use a more reliable path for logs
+                var currentDirectory = Directory.GetCurrentDirectory();
+                var directory = Path.Combine(currentDirectory, "ApiLogs");
+                
+                _logger.LogInformation("Attempting to save logs to directory: {Directory}", directory);
+                
+                // Create directory if it doesn't exist
+                if (!Directory.Exists(directory))
+                {
+                    _logger.LogInformation("Creating ApiLogs directory at {Directory}", directory);
+                    Directory.CreateDirectory(directory);
+                }
+                
                 var requestFilename = Path.Combine(directory, $"{symbol}_OpenRouter_Request_{DateTime.UtcNow:yyyyMMdd_HHmmss}.txt");
-                await File.WriteAllTextAsync(requestFilename, 
-                    $"Request URL: {_httpClient.BaseAddress}{request.RequestUri}\n" +
+                _logger.LogInformation("Saving request to file: {Filename}", requestFilename);
+                
+                var logContent = $"Request URL: {_httpClient.BaseAddress}{request.RequestUri}\n" +
                     $"Headers:\n{string.Join("\n", request.Headers.Select(h => $"{h.Key}: {string.Join(", ", h.Value)}"))})\n\n" +
-                    $"Content:\n{requestContent}");
-                _logger.LogInformation("Request details saved to {Filename}", requestFilename);
+                    $"Content:\n{requestContent}";
+                
+                await File.WriteAllTextAsync(requestFilename, logContent);
+                _logger.LogInformation("Successfully saved request details to {Filename}", requestFilename);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error saving request details");
+                _logger.LogError(ex, "Error saving request details. Current directory: {Directory}, Exception: {Message}", 
+                    Directory.GetCurrentDirectory(), ex.Message);
             }
 
             _logger.LogInformation("Sending request to {BaseAddress} for {ApiType} analysis", _httpClient.BaseAddress, _apiType);
@@ -290,24 +307,189 @@ Always verify your information with reliable sources and include citations. Be a
                 _logger.LogInformation("Raw response length: {Length} characters", responseString?.Length ?? 0);
                 _logger.LogDebug("Raw API response: {Response}", responseString);
 
+                // Log the response to file
+                try
+                {
+                    var currentDirectory = Directory.GetCurrentDirectory();
+                    var directory = Path.Combine(currentDirectory, "ApiLogs");
+                    
+                    // Create directory if it doesn't exist (should already exist from request logging)
+                    if (!Directory.Exists(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+                    
+                    var responseFilename = Path.Combine(directory, $"{symbol}_OpenRouter_Response_{DateTime.UtcNow:yyyyMMdd_HHmmss}.txt");
+                    _logger.LogInformation("Saving response to file: {Filename}", responseFilename);
+                    
+                    var logContent = $"Response Status: {response.StatusCode}\n" +
+                        $"Response Headers:\n{string.Join("\n", response.Headers.Select(h => $"{h.Key}: {string.Join(", ", h.Value)}"))})\n\n" +
+                        $"Response Content:\n{responseString}";
+                    
+                    await File.WriteAllTextAsync(responseFilename, logContent);
+                    _logger.LogInformation("Successfully saved response details to {Filename}", responseFilename);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error saving response details. Current directory: {Directory}, Exception: {Message}", 
+                        Directory.GetCurrentDirectory(), ex.Message);
+                }
+
                 if (string.IsNullOrEmpty(responseString))
                 {
                     throw new InvalidOperationException("Empty response from OpenRouter API");
                 }
 
                 // First parse the OpenRouter wrapper response
-                var openRouterResponse = JsonSerializer.Deserialize<OpenRouterResponse>(responseString);
-                if (openRouterResponse?.Choices == null || openRouterResponse.Choices.Count == 0 || 
-                    string.IsNullOrEmpty(openRouterResponse.Choices[0].Text))
+                var options = new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    AllowTrailingCommas = true,
+                    ReadCommentHandling = JsonCommentHandling.Skip,
+                    NumberHandling = JsonNumberHandling.AllowReadingFromString
+                };
+                
+                _logger.LogDebug("Attempting to deserialize OpenRouter response");
+                var openRouterResponse = JsonSerializer.Deserialize<OpenRouterResponse>(responseString, options);
+                
+                if (openRouterResponse?.choices == null || openRouterResponse.choices.Count == 0 || 
+                    string.IsNullOrEmpty(openRouterResponse.choices[0].message.content))
                 {
                     throw new InvalidOperationException("Invalid response format from OpenRouter API");
                 }
 
                 // Get the actual content from the message
-                responseContent = openRouterResponse.Choices[0].Text;
-                modelUsed = !string.IsNullOrEmpty(openRouterResponse.Model) ? openRouterResponse.Model : _model;
+                responseContent = openRouterResponse.choices[0].message.content;
+                modelUsed = !string.IsNullOrEmpty(openRouterResponse.model) ? openRouterResponse.model : _model;
                 
-                _logger.LogDebug("Extracted content from OpenRouter response: {Content}", responseContent);
+                _logger.LogDebug("Successfully extracted content from OpenRouter response");
+                _logger.LogDebug("Content: {Content}", responseContent);
+
+                // Now parse the content as SentimentData
+                try 
+                {
+                    // Clean up the content first
+                    responseContent = responseContent.Replace("\n", "").Replace("\r", "");
+                    
+                    // Try to fix any malformed JSON
+                    responseContent = CleanupJsonContent(responseContent);
+                    
+                    _logger.LogDebug("Cleaned response content: {Content}", responseContent);
+
+                    // Verify we have a complete JSON object
+                    if (!responseContent.StartsWith("{") || !responseContent.EndsWith("}"))
+                    {
+                        throw new InvalidOperationException("Response content is not a valid JSON object");
+                    }
+
+                    // Try to parse as JObject first to validate JSON structure
+                    using var jsonDoc = JsonDocument.Parse(responseContent);
+                    var rootElement = jsonDoc.RootElement;
+
+                    // Verify we have all required properties
+                    var requiredProperties = new[] { "sentiment", "confidence", "currentPrice", "direction" };
+                    foreach (var prop in requiredProperties)
+                    {
+                        if (!rootElement.TryGetProperty(prop, out _))
+                        {
+                            _logger.LogWarning("Missing required property: {Property}", prop);
+                            throw new InvalidOperationException($"Response is missing required property: {prop}");
+                        }
+                    }
+                    
+                    var jsonOptions = new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true,
+                        AllowTrailingCommas = true,
+                        ReadCommentHandling = JsonCommentHandling.Skip,
+                        NumberHandling = JsonNumberHandling.AllowReadingFromString,
+                        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+                        Converters = 
+                        {
+                            new FlexibleBooleanConverter()
+                        }
+                    };
+
+                    // Try to clean up any potential JSON issues
+                    responseContent = responseContent.Replace("\"isSafeToEnterAtCurrentPrice\": \"true\"", "\"isSafeToEnterAtCurrentPrice\": true")
+                                                  .Replace("\"isSafeToEnterAtCurrentPrice\": \"false\"", "\"isSafeToEnterAtCurrentPrice\": false")
+                                                  .Replace("\"available\": \"true\"", "\"available\": true")
+                                                  .Replace("\"available\": \"false\"", "\"available\": false");
+
+                    var sentimentData = JsonSerializer.Deserialize<SentimentData>(responseContent, jsonOptions);
+                    if (sentimentData == null)
+                    {
+                        throw new InvalidOperationException("Failed to deserialize sentiment data from response content");
+                    }
+                    
+                    // Ensure arrays are not null
+                    sentimentData.factors ??= new List<string>();
+                    sentimentData.sources ??= new List<string>();
+                    
+                    _logger.LogDebug("Successfully deserialized sentiment data: Sentiment={Sentiment}, Direction={Direction}", 
+                        sentimentData.sentiment, sentimentData.direction);
+
+                    var sessionInfo = _marketSessionService.GetCurrentSessionInfo(symbol);
+                    
+                    var result = new SentimentAnalysisResult
+                    {
+                        CurrencyPair = symbol,
+                        Sentiment = ParseSentiment(sentimentData.sentiment),
+                        Confidence = sentimentData.confidence,
+                        Factors = sentimentData.factors ?? new List<string>(),
+                        Summary = sentimentData.summary,
+                        Sources = sentimentData.sources ?? new List<string>(),
+                        Timestamp = DateTime.UtcNow,
+                        CurrentPrice = sentimentData.currentPrice,
+                        TradeRecommendation = string.IsNullOrEmpty(sentimentData.direction) ? "None" : 
+                            sentimentData.direction.Trim().ToLower() switch
+                            {
+                                "buy" => "Buy",
+                                "sell" => "Sell",
+                                _ => "None"
+                            },
+                        StopLossPrice = sentimentData.stopLossPrice,
+                        TakeProfitPrice = sentimentData.takeProfitPrice,
+                        BestEntryPrice = sentimentData.bestEntryPrice > 0 ? sentimentData.bestEntryPrice : sentimentData.currentPrice,
+                        OrderType = ParseOrderType(sentimentData.orderType, sentimentData.direction, sentimentData.currentPrice, sentimentData.bestEntryPrice),
+                        TimeToBestEntry = !string.IsNullOrEmpty(sentimentData.timeToBestEntry) ? sentimentData.timeToBestEntry : "Unknown",
+                        ValidUntil = ParseValidityPeriod(sentimentData.validityPeriod),
+                        IsSafeToEnterAtCurrentPrice = sentimentData.isSafeToEnterAtCurrentPrice,
+                        CurrentEntryReason = sentimentData.currentEntryReason,
+                        RiskLevel = !string.IsNullOrEmpty(sentimentData.riskLevel) ? sentimentData.riskLevel : "Medium",
+                        MarketSession = new MarketSessionInfo
+                        {
+                            CurrentSession = sessionInfo.CurrentSession.ToString(),
+                            Description = sessionInfo.Description,
+                            LiquidityLevel = sessionInfo.LiquidityLevel,
+                            RecommendedSession = sessionInfo.RecommendedSession.ToString(),
+                            RecommendationReason = sessionInfo.RecommendationReason,
+                            TimeUntilNextSession = FormatTimeSpan(sessionInfo.TimeUntilNextSession),
+                            NextSession = sessionInfo.NextSession.ToString(),
+                            CurrentTimeUtc = sessionInfo.CurrentTimeUtc,
+                            NextSessionStartTimeUtc = sessionInfo.NextSessionStartTimeUtc
+                        },
+                        ModelUsed = modelUsed,
+                        ModelReasoning = reasoning,
+                        InOutPlay = sentimentData.inOutPlay != null ? new InOutPlay
+                        {
+                            Available = sentimentData.inOutPlay.available,
+                            Direction = sentimentData.inOutPlay.direction,
+                            EntryPrice = sentimentData.inOutPlay.entryPrice,
+                            StopLoss = sentimentData.inOutPlay.stopLoss,
+                            TakeProfit = sentimentData.inOutPlay.takeProfit,
+                            Timeframe = sentimentData.inOutPlay.timeframe,
+                            Reason = sentimentData.inOutPlay.reason
+                        } : null
+                    };
+
+                    return result;
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogError(ex, "Error deserializing sentiment data from content: {Content}", responseContent);
+                    throw;
+                }
             }
             catch (OperationCanceledException ex)
             {
@@ -318,127 +500,6 @@ Always verify your information with reliable sources and include citations. Be a
             {
                 _logger.LogError(ex, "Error getting response from API for {Symbol}", symbol);
                 return CreateFallbackAnalysis(symbol, "Error communicating with API", _model, string.Empty);
-            }
-
-            // Try to find JSON in the response
-            var jsonStartIndex = responseContent.LastIndexOf('{');
-            var jsonEndIndex = responseContent.LastIndexOf('}');
-            
-            if (jsonStartIndex == -1 || jsonEndIndex == -1)
-            {
-                _logger.LogWarning("Could not find valid JSON in response. Attempting to fix response format.");
-                // Try to extract any JSON-like content
-                var matches = System.Text.RegularExpressions.Regex.Matches(responseContent, @"\{[^{}]*\}");
-                if (matches.Count > 0)
-                {
-                    // Take the last match as it's likely the most complete
-                    var lastMatch = matches[matches.Count - 1].Value;
-                    jsonContent = lastMatch;
-                    reasoning = responseContent.Substring(0, responseContent.IndexOf(lastMatch)).Trim();
-                }
-                else
-                {
-                    return CreateFallbackAnalysis(symbol, "Could not extract JSON from response", modelUsed, string.Empty);
-                }
-            }
-            else
-            {
-                jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
-                reasoning = responseContent.Substring(0, jsonStartIndex).Trim();
-            }
-            
-            _logger.LogDebug("Extracted reasoning: {Reasoning}", reasoning);
-            _logger.LogDebug("Extracted JSON: {Json}", jsonContent);
-            
-            try
-            {
-                var options = new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                    AllowTrailingCommas = true
-                };
-
-                // Try to clean up the JSON content first
-                jsonContent = CleanupJsonContent(jsonContent);
-                
-                _logger.LogDebug("Cleaned JSON content: {Json}", jsonContent);
-                
-                var sentimentData = JsonSerializer.Deserialize<SentimentData>(jsonContent, options);
-                
-                if (sentimentData == null)
-                {
-                    return CreateFallbackAnalysis(symbol, "Could not parse sentiment data", modelUsed, reasoning);
-                }
-
-                // Store the reasoning in the response object
-                reasoning = responseContent.Substring(0, jsonStartIndex).Trim();
-
-                var sessionInfo = _marketSessionService.GetCurrentSessionInfo(symbol);
-                
-                var result = new SentimentAnalysisResult
-                {
-                    CurrencyPair = symbol,
-                    Sentiment = ParseSentiment(sentimentData.sentiment),
-                    Confidence = sentimentData.confidence,
-                    Factors = sentimentData.factors ?? new List<string>(),
-                    Summary = sentimentData.summary,
-                    Sources = sentimentData.sources ?? new List<string>(),
-                    Timestamp = DateTime.UtcNow,
-                    CurrentPrice = sentimentData.currentPrice,
-                    TradeRecommendation = string.IsNullOrEmpty(sentimentData.direction) ? "None" : 
-                        sentimentData.direction.Trim().ToLower() switch
-                        {
-                            "buy" => "Buy",
-                            "sell" => "Sell",
-                            _ => "None"
-                        },
-                    StopLossPrice = sentimentData.stopLossPrice,
-                    TakeProfitPrice = sentimentData.takeProfitPrice,
-                    BestEntryPrice = sentimentData.bestEntryPrice > 0 ? sentimentData.bestEntryPrice : sentimentData.currentPrice,
-                    OrderType = ParseOrderType(sentimentData.orderType, sentimentData.direction, sentimentData.currentPrice, sentimentData.bestEntryPrice),
-                    TimeToBestEntry = !string.IsNullOrEmpty(sentimentData.timeToBestEntry) ? sentimentData.timeToBestEntry : "Unknown",
-                    ValidUntil = ParseValidityPeriod(sentimentData.validityPeriod),
-                    IsSafeToEnterAtCurrentPrice = sentimentData.isSafeToEnterAtCurrentPrice,
-                    CurrentEntryReason = sentimentData.currentEntryReason,
-                    RiskLevel = !string.IsNullOrEmpty(sentimentData.riskLevel) ? sentimentData.riskLevel : "Medium",
-                    MarketSession = new MarketSessionInfo
-                    {
-                        CurrentSession = sessionInfo.CurrentSession.ToString(),
-                        Description = sessionInfo.Description,
-                        LiquidityLevel = sessionInfo.LiquidityLevel,
-                        RecommendedSession = sessionInfo.RecommendedSession.ToString(),
-                        RecommendationReason = sessionInfo.RecommendationReason,
-                        TimeUntilNextSession = FormatTimeSpan(sessionInfo.TimeUntilNextSession),
-                        NextSession = sessionInfo.NextSession.ToString(),
-                        CurrentTimeUtc = sessionInfo.CurrentTimeUtc,
-                        NextSessionStartTimeUtc = sessionInfo.NextSessionStartTimeUtc
-                    },
-                    ModelUsed = modelUsed,
-                    ModelReasoning = reasoning // Add the reasoning to the result
-                };
-
-                if (sessionInfo.CurrentSession != sessionInfo.RecommendedSession && result.IsTradeRecommended && !IsCryptoPair(symbol))
-                {
-                    result.SessionWarning = $"Warning: Current market session ({sessionInfo.CurrentSession}) is not optimal for trading {symbol}. Consider waiting for the {sessionInfo.RecommendedSession} session for better liquidity and trading conditions.";
-                }
-                
-                result.PositionSizing = await _positionSizingService.CalculatePositionSizingAsync(
-                    symbol,
-                    result.CurrentPrice);
-                
-                // Log successful extraction of reasoning and analysis
-                if (!string.IsNullOrEmpty(result.ModelReasoning))
-                {
-                    _logger.LogInformation("Successfully extracted model reasoning ({Length} characters) for {Symbol}", 
-                        result.ModelReasoning.Length, symbol);
-                }
-                
-                return result;
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(ex, "Error parsing JSON response. Using fallback analysis.");
-                return CreateFallbackAnalysis(symbol, responseContent, modelUsed, reasoning);
             }
         }
         catch (Exception ex)
@@ -1076,7 +1137,7 @@ Always verify your information with reliable sources and include citations. Be a
             PositionSizing = analysis.PositionSizing,
             ModelUsed = analysis.ModelUsed,
             ModelReasoning = analysis.ModelReasoning, // Add the reasoning to the recommendation
-            InOutPlay = analysis.InOutPlay // Add the InOutPlay data
+            InOutPlay = analysis.InOutPlay
         };
         
         return recommendation;
@@ -1102,29 +1163,112 @@ Always verify your information with reliable sources and include citations. Be a
                 }
             }
             
-            // Find the last complete JSON object
-            var lastObjectStart = content.LastIndexOf('{');
-            var lastObjectEnd = content.LastIndexOf('}');
+            // Find the outermost complete JSON object
+            var stack = new Stack<int>();
+            var start = -1;
+            var end = -1;
             
-            if (lastObjectStart >= 0 && lastObjectEnd > lastObjectStart)
+            for (int i = 0; i < content.Length; i++)
             {
-                content = content.Substring(lastObjectStart, lastObjectEnd - lastObjectStart + 1);
+                if (content[i] == '{')
+                {
+                    if (stack.Count == 0)
+                    {
+                        start = i;
+                    }
+                    stack.Push(i);
+                }
+                else if (content[i] == '}')
+                {
+                    if (stack.Count > 0)
+                    {
+                        stack.Pop();
+                        if (stack.Count == 0)
+                        {
+                            end = i;
+                            break;
+                        }
+                    }
+                }
             }
             
-            // Remove any trailing commas before closing braces
-            content = System.Text.RegularExpressions.Regex.Replace(content, @",(\s*})", "$1");
+            if (start >= 0 && end > start)
+            {
+                content = content.Substring(start, end - start + 1);
+            }
+            
+            // Remove any trailing commas before closing braces or brackets
+            content = System.Text.RegularExpressions.Regex.Replace(content, @",(\s*[}\]])", "$1");
             
             // Ensure all property names are properly quoted
             content = System.Text.RegularExpressions.Regex.Replace(content, @"([{,]\s*)(\w+)(\s*:)", "$1\"$2\"$3");
             
-            return content;
+            // Fix any unescaped quotes within string values
+            content = System.Text.RegularExpressions.Regex.Replace(
+                content, 
+                @"(?<=:\s*""|,\s*"")[^""\[\]{}]*(?="")", 
+                m => m.Value.Replace("\"", "\\\"")
+            );
+            
+            // Fix any missing quotes around string values
+            content = System.Text.RegularExpressions.Regex.Replace(
+                content, 
+                @":\s*([^""\d\[\]{},\s][^,\[\]{}}]*?)(?=,|\s*[}\]])", 
+                ": \"$1\""
+            );
+            
+            _logger.LogDebug("Cleaned JSON content: {Content}", content);
+            
+            // Validate the JSON structure
+            using (JsonDocument.Parse(content))
+            {
+                return content;
+            }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Error cleaning up JSON content");
-            return content; // Return original content if cleanup fails
+            throw new InvalidOperationException("Failed to clean up malformed JSON", ex);
         }
     }
+
+    #region JSON Converters
+    
+    /// <summary>
+    /// Custom JSON converter that can handle boolean values represented as strings
+    /// </summary>
+    private class FlexibleBooleanConverter : JsonConverter<bool>
+    {
+        public override bool Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.True:
+                    return true;
+                case JsonTokenType.False:
+                    return false;
+                case JsonTokenType.String:
+                    var stringValue = reader.GetString()?.ToLower().Trim();
+                    return stringValue switch
+                    {
+                        "true" or "yes" or "1" or "on" => true,
+                        "false" or "no" or "0" or "off" => false,
+                        _ => false // Default to false for unrecognized values
+                    };
+                case JsonTokenType.Number:
+                    return reader.GetInt32() != 0;
+                default:
+                    return false;
+            }
+        }
+
+        public override void Write(Utf8JsonWriter writer, bool value, JsonSerializerOptions options)
+        {
+            writer.WriteBooleanValue(value);
+        }
+    }
+    
+    #endregion
 
     #region API Response Classes
     
@@ -1159,22 +1303,56 @@ Always verify your information with reliable sources and include citations. Be a
     /// </summary>
     private class SentimentData
     {
+        [JsonPropertyName("sentiment")]
         public string sentiment { get; set; } = string.Empty;
+
+        [JsonPropertyName("confidence")]
         public decimal confidence { get; set; }
+
+        [JsonPropertyName("currentPrice")]
         public decimal currentPrice { get; set; }
+
+        [JsonPropertyName("direction")]
         public string direction { get; set; } = string.Empty;
+
+        [JsonPropertyName("stopLossPrice")]
         public decimal stopLossPrice { get; set; }
+
+        [JsonPropertyName("takeProfitPrice")]
         public decimal takeProfitPrice { get; set; }
+
+        [JsonPropertyName("bestEntryPrice")]
         public decimal bestEntryPrice { get; set; }
+
+        [JsonPropertyName("orderType")]
         public string orderType { get; set; } = "Market";
+
+        [JsonPropertyName("timeToBestEntry")]
         public string timeToBestEntry { get; set; } = string.Empty;
+
+        [JsonPropertyName("validityPeriod")]
         public string validityPeriod { get; set; } = "24 hours";
-        public bool isSafeToEnterAtCurrentPrice { get; set; } = false;
+
+        [JsonPropertyName("isSafeToEnterAtCurrentPrice")]
+        [JsonConverter(typeof(FlexibleBooleanConverter))]
+        public bool isSafeToEnterAtCurrentPrice { get; set; }
+
+        [JsonPropertyName("currentEntryReason")]
         public string currentEntryReason { get; set; } = string.Empty;
+
+        [JsonPropertyName("riskLevel")]
         public string riskLevel { get; set; } = "Medium";
+
+        [JsonPropertyName("factors")]
         public List<string>? factors { get; set; }
+
+        [JsonPropertyName("summary")]
         public string summary { get; set; } = string.Empty;
+
+        [JsonPropertyName("sources")]
         public List<string>? sources { get; set; }
+
+        [JsonPropertyName("inOutPlay")]
         public InOutPlayData? inOutPlay { get; set; }
     }
 
@@ -1183,12 +1361,26 @@ Always verify your information with reliable sources and include citations. Be a
     /// </summary>
     private class InOutPlayData
     {
-        public bool available { get; set; } = false;
+        [JsonPropertyName("available")]
+        [JsonConverter(typeof(FlexibleBooleanConverter))]
+        public bool available { get; set; }
+
+        [JsonPropertyName("direction")]
         public string direction { get; set; } = string.Empty;
+
+        [JsonPropertyName("entryPrice")]
         public decimal entryPrice { get; set; }
+
+        [JsonPropertyName("stopLoss")]
         public decimal stopLoss { get; set; }
+
+        [JsonPropertyName("takeProfit")]
         public decimal takeProfit { get; set; }
+
+        [JsonPropertyName("timeframe")]
         public string timeframe { get; set; } = string.Empty;
+
+        [JsonPropertyName("reason")]
         public string reason { get; set; } = string.Empty;
     }
     
@@ -1218,25 +1410,71 @@ Always verify your information with reliable sources and include citations. Be a
     /// </summary>
     private class OpenRouterResponse
     {
-        public required string Id { get; set; }
-        public required string Provider { get; set; }
-        public required string Model { get; set; }
-        public required List<OpenRouterChoice> Choices { get; set; }
-        public required OpenRouterUsage Usage { get; set; }
+        [JsonPropertyName("id")]
+        public string id { get; set; } = string.Empty;
+        
+        [JsonPropertyName("provider")]
+        public string provider { get; set; } = string.Empty;
+        
+        [JsonPropertyName("model")]
+        public string model { get; set; } = string.Empty;
+        
+        [JsonPropertyName("object")]
+        public string @object { get; set; } = string.Empty;
+        
+        [JsonPropertyName("created")]
+        public long created { get; set; }
+        
+        [JsonPropertyName("choices")]
+        public List<OpenRouterChoice> choices { get; set; } = new();
+        
+        [JsonPropertyName("system_fingerprint")]
+        public string system_fingerprint { get; set; } = string.Empty;
+        
+        [JsonPropertyName("usage")]
+        public OpenRouterUsage usage { get; set; } = new();
     }
 
     public class OpenRouterChoice
     {
-        public required string Text { get; set; }
-        public required int Index { get; set; }
-        public required string FinishReason { get; set; }
+        [JsonPropertyName("logprobs")]
+        public object? logprobs { get; set; }
+        
+        [JsonPropertyName("finish_reason")]
+        public string finish_reason { get; set; } = string.Empty;
+        
+        [JsonPropertyName("native_finish_reason")]
+        public string native_finish_reason { get; set; } = string.Empty;
+        
+        [JsonPropertyName("index")]
+        public int index { get; set; }
+        
+        [JsonPropertyName("message")]
+        public OpenRouterMessage message { get; set; } = new();
+    }
+
+    public class OpenRouterMessage
+    {
+        [JsonPropertyName("role")]
+        public string role { get; set; } = string.Empty;
+        
+        [JsonPropertyName("content")]
+        public string content { get; set; } = string.Empty;
+        
+        [JsonPropertyName("refusal")]
+        public object? refusal { get; set; }
     }
 
     public class OpenRouterUsage
     {
-        public required int PromptTokens { get; set; }
-        public required int CompletionTokens { get; set; }
-        public required int TotalTokens { get; set; }
+        [JsonPropertyName("prompt_tokens")]
+        public int prompt_tokens { get; set; }
+        
+        [JsonPropertyName("completion_tokens")]
+        public int completion_tokens { get; set; }
+        
+        [JsonPropertyName("total_tokens")]
+        public int total_tokens { get; set; }
     }
     
     #endregion

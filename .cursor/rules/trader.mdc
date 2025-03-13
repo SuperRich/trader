@@ -1,5 +1,5 @@
 ---
-description: 
+description: Codebase
 globs: 
 alwaysApply: false
 ---
@@ -12,3 +12,7 @@ alwaysApply: false
 - Any new or existing existing endpoints are to be created in program.cs
 - This ia a forex and crypto application api
 - Use nullable reference types (available in .NET 8) where appropiate
+- You will find all DataProviders in Trader.Infrastructure
+- All new Endpoints must live in Program.cs
+- If a new data provider or api is added, please make it easy for someone to add their key with a simple cURL method. See TraderMade in the Readme.md for an example
+
