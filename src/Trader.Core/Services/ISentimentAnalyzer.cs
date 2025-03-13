@@ -86,6 +86,47 @@ public enum OrderType
 }
 
 /// <summary>
+/// Represents a quick scalping trade opportunity.
+/// </summary>
+public class InOutPlay
+{
+    /// <summary>
+    /// Whether a quick scalping opportunity is available.
+    /// </summary>
+    public bool Available { get; set; }
+
+    /// <summary>
+    /// The trade direction for the scalp (Buy or Sell).
+    /// </summary>
+    public string Direction { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The entry price for the scalp trade.
+    /// </summary>
+    public decimal EntryPrice { get; set; }
+
+    /// <summary>
+    /// The stop loss price for the scalp trade.
+    /// </summary>
+    public decimal StopLoss { get; set; }
+
+    /// <summary>
+    /// The take profit price for the scalp trade.
+    /// </summary>
+    public decimal TakeProfit { get; set; }
+
+    /// <summary>
+    /// Expected time to be in the trade (e.g., "5-15 minutes").
+    /// </summary>
+    public string Timeframe { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Brief explanation of the scalping setup.
+    /// </summary>
+    public string Reason { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// Contains the result of a sentiment analysis for a currency pair.
 /// </summary>
 public class SentimentAnalysisResult
@@ -214,6 +255,16 @@ public class SentimentAnalysisResult
     /// Position sizing information for this currency pair.
     /// </summary>
     public PositionSizingInfo? PositionSizing { get; set; }
+    
+    /// <summary>
+    /// The model's step-by-step reasoning process that led to this analysis.
+    /// </summary>
+    public string ModelReasoning { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Quick scalping trade opportunity with tight stop loss and quick profit target.
+    /// </summary>
+    public InOutPlay? InOutPlay { get; set; }
 }
 
 /// <summary>
@@ -405,4 +456,14 @@ public class ForexRecommendation
     /// Position sizing information for this currency pair.
     /// </summary>
     public PositionSizingInfo? PositionSizing { get; set; }
+    
+    /// <summary>
+    /// The model's step-by-step reasoning process that led to this recommendation.
+    /// </summary>
+    public string ModelReasoning { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Quick scalping trade opportunity with tight stop loss and quick profit target.
+    /// </summary>
+    public InOutPlay? InOutPlay { get; set; }
 }

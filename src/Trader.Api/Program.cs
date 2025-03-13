@@ -107,47 +107,32 @@ public class Program
         // Register data providers
         if (!string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]))
         {
-            builder.Services.AddHttpClient<IForexDataProvider, TraderMadeDataProvider>();
+            builder.Services.AddHttpClient<TraderMadeDataProvider>();
             builder.Services.AddSingleton<TraderMadeDataProvider>();
+            builder.Services.AddSingleton<IForexDataProvider>(sp => sp.GetRequiredService<TraderMadeDataProvider>());
             Console.WriteLine("Using TraderMade as default data provider");
         }
         else if (!string.IsNullOrEmpty(builder.Configuration["TwelveData:ApiKey"]))
         {
-            builder.Services.AddHttpClient<IForexDataProvider, TwelveDataProvider>();
+            builder.Services.AddHttpClient<TwelveDataProvider>();
             builder.Services.AddSingleton<TwelveDataProvider>();
+            builder.Services.AddSingleton<IForexDataProvider>(sp => sp.GetRequiredService<TwelveDataProvider>());
             Console.WriteLine("Using TwelveData as default data provider");
         }
         else if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
         {
-            builder.Services.AddHttpClient<IForexDataProvider, PolygonDataProvider>();
-            builder.Services.AddSingleton<PolygonDataProvider>();
-            Console.WriteLine("Using Polygon as default data provider");
-        }
-        else
-        {
-            builder.Services.AddSingleton<IForexDataProvider, ForexDataProvider>();
-            Console.WriteLine("Using mock forex data provider as default");
-        }
-        
-        // Register additional data providers if API keys are available
-        if (!string.IsNullOrEmpty(builder.Configuration["TwelveData:ApiKey"]) && 
-            builder.Configuration["TwelveData:ApiKey"] != builder.Configuration["TraderMade:ApiKey"])
-        {
-            builder.Services.AddHttpClient<TwelveDataProvider>();
-            builder.Services.AddSingleton<TwelveDataProvider>();
-        }
-        
-        if (!string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]) && 
-            builder.Configuration["TraderMade:ApiKey"] != builder.Configuration["TwelveData:ApiKey"])
-        {
-            builder.Services.AddHttpClient<TraderMadeDataProvider>();
-            builder.Services.AddSingleton<TraderMadeDataProvider>();
-        }
-        
-        if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
-        {
             builder.Services.AddHttpClient<PolygonDataProvider>();
             builder.Services.AddSingleton<PolygonDataProvider>();
+            builder.Services.AddSingleton<IForexDataProvider>(sp => sp.GetRequiredService<PolygonDataProvider>());
+            Console.WriteLine("Using Polygon as default data provider");
+        }
+        
+        // Always register the mock provider last as a fallback
+        builder.Services.AddSingleton<ForexDataProvider>();
+        if (!builder.Services.Any(s => s.ServiceType == typeof(IForexDataProvider)))
+        {
+            builder.Services.AddSingleton<IForexDataProvider>(sp => sp.GetRequiredService<ForexDataProvider>());
+            Console.WriteLine("Using mock forex data provider as default");
         }
         
         // Register sentiment analyzers
@@ -166,7 +151,10 @@ public class Program
         else if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]) || !string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]))
         {
             // Register TradingViewAnalyzer if any data provider is available but no sentiment API keys
-            builder.Services.AddHttpClient<ISentimentAnalyzer, TradingViewAnalyzer>();
+            builder.Services.AddHttpClient<ISentimentAnalyzer, TradingViewAnalyzer>()
+                .ConfigureHttpClient(client => {
+                    client.Timeout = TimeSpan.FromMinutes(5); // Increase timeout to 5 minutes for DeepSeek model
+                });
             Console.WriteLine("Using TradingView chart analyzer");
         }
         else
@@ -392,6 +380,7 @@ public class Program
                 
                 // Create a new HttpClient for the analyzer
                 var httpClient = new HttpClient();
+                httpClient.Timeout = TimeSpan.FromMinutes(5); // Increase timeout to 5 minutes for DeepSeek model
                 httpClient.DefaultRequestHeaders.Accept.Clear();
                 httpClient.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
                 
@@ -443,7 +432,10 @@ public class Program
                 }
                 else if (analyzerType == "Perplexity")
                 {
-                    configDictionary["Perplexity:ApiKey"] = perplexityApiKey;
+                    if (!string.IsNullOrEmpty(perplexityApiKey))
+                    {
+                        configDictionary["Perplexity:ApiKey"] = perplexityApiKey;
+                    }
                 }
                 
                 // Create a configuration that includes our model setting
@@ -460,7 +452,8 @@ public class Program
                     loggerFactory.CreateLogger<TradingViewAnalyzer>(),
                     app.Services.GetRequiredService<ForexMarketSessionService>(),
                     app.Services.GetRequiredService<IPositionSizingService>(),
-                    app.Services);
+                    app.Services,
+                    providerType);
                 
                 var analysis = await analyzer.AnalyzeSentimentAsync(symbol);
                 
@@ -526,7 +519,7 @@ public class Program
                 return Results.Problem($"Error analyzing chart: {ex.Message}", statusCode: 500);
             }
         })
-        .WithName("AnalyzeChartWithProvider")
+        .WithName("AnalyzeSymbol")
         .WithOpenApi();
         
         // Endpoint to get market sentiment analysis for a currency pair
@@ -622,140 +615,168 @@ public class Program
         .WithOpenApi();
         
         // Endpoint to set OpenRouter API key
-        app.MapPost("/api/config/openrouter-key", 
-            (OpenRouterKeyRequest request, IConfiguration configuration, IWebHostEnvironment env, ILogger<Program> logger) =>
+        app.MapPost("/api/diagnostics/set-openrouter-key", 
+            async (OpenRouterKeyRequest request, IConfiguration configuration, ILogger<Program> logger) =>
             {
+                if (string.IsNullOrEmpty(request.ApiKey))
+                {
+                    return Results.BadRequest("API key cannot be empty");
+                }
+                
                 try
                 {
-                    if (string.IsNullOrWhiteSpace(request.ApiKey))
-                    {
-                        return Results.BadRequest("API key is required");
-                    }
+                    // Test if the key is valid by making a simple API call
+                    var httpClient = new HttpClient();
+                    httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", request.ApiKey);
+                    httpClient.DefaultRequestHeaders.Add("HTTP-Referer", "https://trader.app");
                     
-                    // Create a dictionary to hold the new configuration
-                    var configValues = new Dictionary<string, string>
-                    {
-                        { "OpenRouter:ApiKey", request.ApiKey }
-                    };
+                    var testUrl = "https://openrouter.ai/api/v1/auth/key";
                     
-                    // Add the configuration to the current configuration
-                    var configBuilder = new ConfigurationBuilder()
-                        .AddConfiguration(configuration)
-                        .AddInMemory(configValues);
+                    logger.LogInformation("Testing OpenRouter API with key starting with {KeyPrefix}", 
+                        request.ApiKey.Length > 4 ? request.ApiKey[..4] + "..." : "too short");
                     
-                    var newConfig = configBuilder.Build();
+                    var response = await httpClient.GetAsync(testUrl);
+                    var responseContent = await response.Content.ReadAsStringAsync();
                     
-                    // Update the configuration
-                    ((IConfigurationRoot)configuration).Reload();
-                    
-                    // Save to user secrets if requested and in development
-                    if (request.SaveToUserSecrets && env.IsDevelopment())
-                    {
-                        var secretsFilePath = Path.Combine(
-                            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                            "Microsoft", "UserSecrets", 
-                            "aspnet-Trader-Api-53bc9b9d-9d6a-45d4-8429-2a2761773502", 
-                            "secrets.json");
+                    logger.LogInformation("OpenRouter API response: Status: {Status}, Content: {Content}", 
+                        response.StatusCode, responseContent);
                         
-                        Dictionary<string, string> secrets = new();
-                        
-                        if (File.Exists(secretsFilePath))
+                    var isValid = response.IsSuccessStatusCode;
+                    var statusMessage = isValid 
+                        ? "Valid API key" 
+                        : $"Invalid API key: {response.StatusCode}. Response: {responseContent}";
+                    
+                    // Only save the key if it's valid and user wants to save
+                    if (isValid && request.SaveToUserSecrets)
+                    {
+                        try
                         {
-                            var existingSecrets = File.ReadAllText(secretsFilePath);
-                            if (!string.IsNullOrEmpty(existingSecrets))
+                            // Save to user secrets
+                            var userSecretsId = "trader-app-secrets-id";
+                            var userSecretsPath = Path.Combine(
+                                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                                "Microsoft", "UserSecrets", userSecretsId);
+                                
+                            Directory.CreateDirectory(userSecretsPath);
+                            
+                            var secretsFilePath = Path.Combine(userSecretsPath, "secrets.json");
+                            
+                            // Read existing secrets if they exist
+                            Dictionary<string, string> secrets;
+                            if (File.Exists(secretsFilePath))
                             {
-                                secrets = JsonSerializer.Deserialize<Dictionary<string, string>>(existingSecrets) ?? new Dictionary<string, string>();
+                                var existingJson = await File.ReadAllTextAsync(secretsFilePath);
+                                secrets = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(existingJson) 
+                                    ?? new Dictionary<string, string>();
+                            }
+                            else
+                            {
+                                secrets = new Dictionary<string, string>();
+                            }
+                            
+                            // Add/update the OpenRouter API key
+                            secrets["OpenRouter:ApiKey"] = request.ApiKey;
+                            
+                            await File.WriteAllTextAsync(
+                                secretsFilePath, 
+                                System.Text.Json.JsonSerializer.Serialize(secrets, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                                
+                            logger.LogInformation("Saved valid OpenRouter API key to user secrets at {Path}", secretsFilePath);
+                            
+                            // Also create a .env file entry
+                            var envFilePath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+                            string envContent = "";
+                            
+                            if (File.Exists(envFilePath))
+                            {
+                                envContent = await File.ReadAllTextAsync(envFilePath);
+                            }
+                            
+                            // Update or add the OpenRouter API key
+                            var envVarName = "TRADER_OPENROUTER_API_KEY";
+                            if (envContent.Contains(envVarName))
+                            {
+                                // Replace existing line
+                                var lines = envContent.Split('\n');
+                                for (int i = 0; i < lines.Length; i++)
+                                {
+                                    if (lines[i].StartsWith(envVarName))
+                                    {
+                                        lines[i] = $"{envVarName}={request.ApiKey}";
+                                        break;
+                                    }
+                                }
+                                envContent = string.Join('\n', lines);
+                            }
+                            else
+                            {
+                                // Add new line
+                                if (!string.IsNullOrEmpty(envContent) && !envContent.EndsWith('\n'))
+                                {
+                                    envContent += '\n';
+                                }
+                                envContent += $"{envVarName}={request.ApiKey}\n";
+                            }
+                            
+                            await File.WriteAllTextAsync(envFilePath, envContent);
+                            logger.LogInformation("Also saved OpenRouter API key to .env file at {Path}", envFilePath);
+                            
+                            // Update appsettings.Development.json if it exists
+                            var appSettingsDevPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.Development.json");
+                            if (File.Exists(appSettingsDevPath))
+                            {
+                                try
+                                {
+                                    var json = await File.ReadAllTextAsync(appSettingsDevPath);
+                                    
+                                    // Check if OpenRouter section exists
+                                    if (json.Contains("\"OpenRouter\": {"))
+                                    {
+                                        var updated = System.Text.RegularExpressions.Regex.Replace(
+                                            json,
+                                            "\"ApiKey\":\\s*\"[^\"]*\"",
+                                            $"\"ApiKey\": \"{request.ApiKey}\"");
+                                            
+                                        await File.WriteAllTextAsync(appSettingsDevPath, updated);
+                                    }
+                                    else
+                                    {
+                                        // Insert OpenRouter section before the closing brace
+                                        var lastBrace = json.LastIndexOf('}');
+                                        if (lastBrace > 0)
+                                        {
+                                            var updated = json.Insert(lastBrace, $",\n  \"OpenRouter\": {{\n    \"ApiKey\": \"{request.ApiKey}\"\n  }}\n");
+                                            await File.WriteAllTextAsync(appSettingsDevPath, updated);
+                                        }
+                                    }
+                                    
+                                    logger.LogInformation("Updated OpenRouter API key in {Path}", appSettingsDevPath);
+                                }
+                                catch (Exception ex)
+                                {
+                                    logger.LogWarning(ex, "Failed to update appsettings.Development.json");
+                                }
                             }
                         }
-                        
-                        secrets["OpenRouter:ApiKey"] = request.ApiKey;
-                        
-                        Directory.CreateDirectory(Path.GetDirectoryName(secretsFilePath)!);
-                        File.WriteAllText(secretsFilePath, JsonSerializer.Serialize(secrets, new JsonSerializerOptions { WriteIndented = true }));
-                        
-                        logger.LogInformation("OpenRouter API key saved to user secrets");
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Failed to save OpenRouter API key to some locations");
+                        }
                     }
                     
-                    logger.LogInformation("OpenRouter API key set successfully");
-                    
-                    return Results.Ok(new { Message = "OpenRouter API key set successfully" });
+                    return Results.Ok(new 
+                    { 
+                        IsValid = isValid,
+                        StatusMessage = statusMessage,
+                        SavedToUserSecrets = isValid && request.SaveToUserSecrets
+                    });
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex, "Error setting OpenRouter API key");
-                    return Results.Problem("Error setting OpenRouter API key: " + ex.Message);
+                    logger.LogError(ex, "Error testing OpenRouter API key");
+                    return Results.Problem($"Error testing API key: {ex.Message}");
                 }
-            })
-        .WithName("SetOpenRouterApiKey")
-        .WithOpenApi();
-        
-        // Endpoint to set OpenRouter model
-        app.MapPost("/api/config/openrouter-model", 
-            (OpenRouterModelRequest request, IConfiguration configuration, IWebHostEnvironment env, ILogger<Program> logger) =>
-            {
-                try
-                {
-                    if (string.IsNullOrWhiteSpace(request.Model))
-                    {
-                        return Results.BadRequest("Model name is required");
-                    }
-                    
-                    // Create a dictionary to hold the new configuration
-                    var configValues = new Dictionary<string, string>
-                    {
-                        { "OpenRouter:Model", request.Model }
-                    };
-                    
-                    // Add the configuration to the current configuration
-                    var configBuilder = new ConfigurationBuilder()
-                        .AddConfiguration(configuration)
-                        .AddInMemory(configValues);
-                    
-                    var newConfig = configBuilder.Build();
-                    
-                    // Update the configuration
-                    ((IConfigurationRoot)configuration).Reload();
-                    
-                    // Save to user secrets if requested and in development
-                    if (request.SaveToUserSecrets && env.IsDevelopment())
-                    {
-                        var secretsFilePath = Path.Combine(
-                            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                            "Microsoft", "UserSecrets", 
-                            "aspnet-Trader-Api-53bc9b9d-9d6a-45d4-8429-2a2761773502", 
-                            "secrets.json");
-                        
-                        Dictionary<string, string> secrets = new();
-                        
-                        if (File.Exists(secretsFilePath))
-                        {
-                            var existingSecrets = File.ReadAllText(secretsFilePath);
-                            if (!string.IsNullOrEmpty(existingSecrets))
-                            {
-                                secrets = JsonSerializer.Deserialize<Dictionary<string, string>>(existingSecrets) ?? new Dictionary<string, string>();
-                            }
-                        }
-                        
-                        secrets["OpenRouter:Model"] = request.Model;
-                        
-                        Directory.CreateDirectory(Path.GetDirectoryName(secretsFilePath)!);
-                        File.WriteAllText(secretsFilePath, JsonSerializer.Serialize(secrets, new JsonSerializerOptions { WriteIndented = true }));
-                        
-                        logger.LogInformation("OpenRouter model saved to user secrets");
-                    }
-                    
-                    logger.LogInformation("OpenRouter model set to: {Model}", request.Model);
-                    
-                    return Results.Ok(new { Message = $"OpenRouter model set to: {request.Model}" });
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "Error setting OpenRouter model");
-                    return Results.Problem("Error setting OpenRouter model: " + ex.Message);
-                }
-            })
-        .WithName("SetOpenRouterModel")
-        .WithOpenApi();
+            });
         
         // Endpoint to set Polygon.io API key
         app.MapPost("/api/diagnostics/set-polygon-key", 
@@ -1239,6 +1260,137 @@ public class Program
                 {
                     logger.LogError(ex, "Error testing TwelveData API key");
                     return Results.Problem($"Error testing API key: {ex.Message}");
+                }
+            });
+        
+        // Endpoint to set OpenRouter model
+        app.MapPost("/api/diagnostics/set-openrouter-model", 
+            async (OpenRouterModelRequest request, IConfiguration configuration, ILogger<Program> logger) =>
+            {
+                if (string.IsNullOrEmpty(request.Model))
+                {
+                    return Results.BadRequest("Model name cannot be empty");
+                }
+                
+                try
+                {
+                    // Save to user secrets
+                    var userSecretsId = "trader-app-secrets-id";
+                    var userSecretsPath = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                        "Microsoft", "UserSecrets", userSecretsId);
+                            
+                    Directory.CreateDirectory(userSecretsPath);
+                    
+                    var secretsFilePath = Path.Combine(userSecretsPath, "secrets.json");
+                    
+                    // Read existing secrets if they exist
+                    Dictionary<string, string> secrets;
+                    if (File.Exists(secretsFilePath))
+                    {
+                        var existingJson = await File.ReadAllTextAsync(secretsFilePath);
+                        secrets = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(existingJson) 
+                            ?? new Dictionary<string, string>();
+                    }
+                    else
+                    {
+                        secrets = new Dictionary<string, string>();
+                    }
+                    
+                    // Add/update the OpenRouter model
+                    secrets["OpenRouter:Model"] = request.Model;
+                    
+                    await File.WriteAllTextAsync(
+                        secretsFilePath, 
+                        System.Text.Json.JsonSerializer.Serialize(secrets, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                            
+                    logger.LogInformation("Saved OpenRouter model to user secrets at {Path}", secretsFilePath);
+                    
+                    // Also create a .env file entry
+                    var envFilePath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+                    string envContent = "";
+                    
+                    if (File.Exists(envFilePath))
+                    {
+                        envContent = await File.ReadAllTextAsync(envFilePath);
+                    }
+                    
+                    // Update or add the OpenRouter model
+                    var envVarName = "TRADER_OPENROUTER_MODEL";
+                    if (envContent.Contains(envVarName))
+                    {
+                        // Replace existing line
+                        var lines = envContent.Split('\n');
+                        for (int i = 0; i < lines.Length; i++)
+                        {
+                            if (lines[i].StartsWith(envVarName))
+                            {
+                                lines[i] = $"{envVarName}={request.Model}";
+                                break;
+                            }
+                        }
+                        envContent = string.Join('\n', lines);
+                    }
+                    else
+                    {
+                        // Add new line
+                        if (!string.IsNullOrEmpty(envContent) && !envContent.EndsWith('\n'))
+                        {
+                            envContent += '\n';
+                        }
+                        envContent += $"{envVarName}={request.Model}\n";
+                    }
+                    
+                    await File.WriteAllTextAsync(envFilePath, envContent);
+                    logger.LogInformation("Also saved OpenRouter model to .env file at {Path}", envFilePath);
+                    
+                    // Update appsettings.Development.json if it exists
+                    var appSettingsDevPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.Development.json");
+                    if (File.Exists(appSettingsDevPath))
+                    {
+                        try
+                        {
+                            var json = await File.ReadAllTextAsync(appSettingsDevPath);
+                            
+                            // Check if OpenRouter section exists
+                            if (json.Contains("\"OpenRouter\": {"))
+                            {
+                                var updated = System.Text.RegularExpressions.Regex.Replace(
+                                    json,
+                                    "\"Model\":\\s*\"[^\"]*\"",
+                                    $"\"Model\": \"{request.Model}\"");
+                                    
+                                await File.WriteAllTextAsync(appSettingsDevPath, updated);
+                            }
+                            else
+                            {
+                                // Insert OpenRouter section before the closing brace
+                                var lastBrace = json.LastIndexOf('}');
+                                if (lastBrace > 0)
+                                {
+                                    var updated = json.Insert(lastBrace, $",\n  \"OpenRouter\": {{\n    \"Model\": \"{request.Model}\"\n  }}\n");
+                                    await File.WriteAllTextAsync(appSettingsDevPath, updated);
+                                }
+                            }
+                            
+                            logger.LogInformation("Updated OpenRouter model in {Path}", appSettingsDevPath);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Failed to update appsettings.Development.json");
+                        }
+                    }
+                    
+                    return Results.Ok(new 
+                    { 
+                        Message = $"OpenRouter model set to: {request.Model}",
+                        SavedToUserSecrets = true
+                    });
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error setting OpenRouter model");
+                    return Results.Problem($"Error setting model: {ex.Message}");
                 }
             });
         

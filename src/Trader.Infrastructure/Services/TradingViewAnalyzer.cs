@@ -29,7 +29,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     /// Constructor for TradingViewAnalyzer
     /// </summary>
     public TradingViewAnalyzer(
-        IForexDataProviderFactory dataProviderFactory,
+        IForexDataProvider dataProvider,
         HttpClient httpClient,
         IConfiguration configuration,
         ILogger<TradingViewAnalyzer> logger,
@@ -42,6 +42,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         _marketSessionService = marketSessionService ?? throw new ArgumentNullException(nameof(marketSessionService));
         _positionSizingService = positionSizingService ?? throw new ArgumentNullException(nameof(positionSizingService));
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
+        _dataProvider = dataProvider ?? throw new ArgumentNullException(nameof(dataProvider));
         
         // Get API key from configuration
         _apiKey = configuration["OpenRouter:ApiKey"] ?? configuration["TRADER_OPENROUTER_API_KEY"] ?? 
@@ -52,21 +53,45 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         if (!string.IsNullOrEmpty(configuration["OpenRouter:ApiKey"]) || !string.IsNullOrEmpty(configuration["TRADER_OPENROUTER_API_KEY"]))
         {
             _apiType = "OpenRouter";
-            _model = "anthropic/claude-3-opus:beta";
+            _model = configuration["OpenRouter:Model"] ?? "openai/o3-mini-high";
+            _httpClient.BaseAddress = new Uri("https://openrouter.ai/api/v1/");
+            // Add default headers for OpenRouter
+            _httpClient.DefaultRequestHeaders.Clear();
+            _httpClient.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+            _httpClient.DefaultRequestHeaders.Add("HTTP-Referer", "https://trader.app");
+            _httpClient.DefaultRequestHeaders.Add("X-Title", "Trader App");
+            _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
         }
         else
         {
             _apiType = "Perplexity";
             _model = "mistral-7b-instruct";
+            _httpClient.BaseAddress = new Uri("https://api.perplexity.ai/");
         }
+        
+        _logger.LogInformation("Initialized TradingViewAnalyzer with {ProviderType} data provider", dataProvider.GetType().Name);
+    }
 
-        // Get the provider type from configuration
-        var providerType = configuration.GetValue<DataProviderType>("DataProvider:Type", DataProviderType.Mock);
-        
-        // Initialize the data provider
-        _dataProvider = dataProviderFactory.GetProvider(providerType);
-        
-        _logger.LogInformation("Initialized TradingViewAnalyzer with {ProviderType} data provider", providerType);
+    /// <summary>
+    /// Constructor for TradingViewAnalyzer using a factory
+    /// </summary>
+    public TradingViewAnalyzer(
+        IForexDataProviderFactory dataProviderFactory,
+        HttpClient httpClient,
+        IConfiguration configuration,
+        ILogger<TradingViewAnalyzer> logger,
+        ForexMarketSessionService marketSessionService,
+        IPositionSizingService positionSizingService,
+        IServiceProvider serviceProvider,
+        DataProviderType? requestedProviderType = null) : this(
+            dataProviderFactory.GetProvider(requestedProviderType ?? configuration.GetValue<DataProviderType>("DataProvider:Type", DataProviderType.Mock)),
+            httpClient,
+            configuration,
+            logger,
+            marketSessionService,
+            positionSizingService,
+            serviceProvider)
+    {
     }
 
     /// <summary>
@@ -84,42 +109,112 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             bool isTraderMade = _dataProvider is TraderMadeDataProvider;
             bool isTwelveData = _dataProvider is TwelveDataProvider;
 
-            // Fetch candle data for multiple timeframes - focusing on higher timeframes
-            // We'll skip 5-minute data and daily data to reduce API calls
+            // Fetch candle data for multiple timeframes
             var candleTasks = new[]
             {
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 24),  // 1H candles
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 12)   // 4H candles
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 24),
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 12)
             };
             
-            // Wait for all data to be retrieved
             await Task.WhenAll(candleTasks);
             
-            // Extract candle data for each timeframe
             var candles1h = await candleTasks[0];
             var candles4h = await candleTasks[1];
-            
-            // Create empty lists for timeframes we're not using
             var candles5m = new List<CandleData>();
             var candles1d = new List<CandleData>();
             
-            // Save chart data to a text file for reference
             await SaveChartDataToFile(symbol, candles5m, candles1h, candles4h, candles1d);
 
-            // Generate the prompt for the sentiment analysis with emphasis on higher timeframes
             var prompt = GenerateChartAnalysisPrompt(symbol, candles5m, candles1h, candles4h, candles1d);
             
-            // Send the prompt to the selected API
             var requestBody = new
             {
                 model = _model,
                 messages = new[]
                 {
-                    new { role = "system", content = "You are an expert trading analyst specializing in technical analysis and market sentiment. Focus on 4-hour and 1-hour timeframes for reliable signals and to filter out market noise. Provide concise, accurate trading advice based on chart data. Be precise with price levels and never make up information. If you're uncertain about specific data points, acknowledge the limitations of your information. Prioritize medium-term trends over short-term fluctuations." },
+                    new { role = "system", content = @"You are a financial analyst specializing in forex markets. Your responses must be structured as follows:
+
+1. REASONING: A brief explanation of your analysis process and key findings
+2. JSON: A valid JSON object containing your analysis results
+
+The JSON must follow this exact structure:
+{
+    ""sentiment"": ""Bullish"" | ""Bearish"" | ""Neutral"",
+    ""confidence"": number between 0.0-1.0,
+    ""currentPrice"": number,
+    ""direction"": ""Buy"" | ""Sell"" | ""None"",
+    ""stopLossPrice"": number,
+    ""takeProfitPrice"": number,
+    ""bestEntryPrice"": number,
+    ""orderType"": ""Market"" | ""Limit"" | ""Stop"",
+    ""timeToBestEntry"": string,
+    ""validityPeriod"": string,
+    ""isSafeToEnterAtCurrentPrice"": boolean,
+    ""currentEntryReason"": string,
+    ""riskLevel"": ""Low"" | ""Medium"" | ""High"" | ""Very High"",
+    ""factors"": string[],
+    ""summary"": string,
+    ""sources"": string[],
+    ""inOutPlay"": {
+        ""available"": boolean,
+        ""direction"": ""Buy"" | ""Sell"",
+        ""entryPrice"": number,
+        ""stopLoss"": number,
+        ""takeProfit"": number,
+        ""timeframe"": string,
+        ""reason"": string
+    }
+}
+
+Always verify your information with reliable sources and include citations. Be accurate with price levels and market data. Never make up information or sources. If you're uncertain about specific data points, acknowledge the limitations of your information." },
                     new { role = "user", content = prompt }
                 },
                 temperature = 0.1,
-                max_tokens = 1000
+                max_tokens = 12000,
+                stream = false,
+                response_format = new
+                {
+                    type = "json_schema",
+                    schema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            sentiment = new { type = "string", @enum = new[] { "Bullish", "Bearish", "Neutral" } },
+                            confidence = new { type = "number", minimum = 0, maximum = 1 },
+                            currentPrice = new { type = "number", minimum = 0 },
+                            direction = new { type = "string", @enum = new[] { "Buy", "Sell", "None" } },
+                            stopLossPrice = new { type = "number", minimum = 0 },
+                            takeProfitPrice = new { type = "number", minimum = 0 },
+                            bestEntryPrice = new { type = "number", minimum = 0 },
+                            orderType = new { type = "string", @enum = new[] { "Market", "Limit", "Stop" } },
+                            timeToBestEntry = new { type = "string" },
+                            validityPeriod = new { type = "string" },
+                            isSafeToEnterAtCurrentPrice = new { type = "boolean" },
+                            currentEntryReason = new { type = "string" },
+                            riskLevel = new { type = "string", @enum = new[] { "Low", "Medium", "High", "Very High" } },
+                            factors = new { type = "array", items = new { type = "string" } },
+                            summary = new { type = "string" },
+                            sources = new { type = "array", items = new { type = "string" } },
+                            inOutPlay = new
+                            {
+                                type = "object",
+                                properties = new
+                                {
+                                    available = new { type = "boolean" },
+                                    direction = new { type = "string", @enum = new[] { "Buy", "Sell" } },
+                                    entryPrice = new { type = "number", minimum = 0 },
+                                    stopLoss = new { type = "number", minimum = 0 },
+                                    takeProfit = new { type = "number", minimum = 0 },
+                                    timeframe = new { type = "string" },
+                                    reason = new { type = "string" }
+                                },
+                                required = new[] { "available", "direction", "entryPrice", "stopLoss", "takeProfit", "timeframe", "reason" }
+                            }
+                        },
+                        required = new[] { "sentiment", "confidence", "currentPrice", "direction", "stopLossPrice", "takeProfitPrice", "bestEntryPrice", "orderType", "timeToBestEntry", "validityPeriod", "isSafeToEnterAtCurrentPrice", "currentEntryReason", "riskLevel", "factors", "summary", "sources", "inOutPlay" }
+                    }
+                }
             };
 
             var content = new StringContent(
@@ -134,142 +229,265 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             
             if (_apiType == "OpenRouter")
             {
-                // OpenRouter requires HTTP-Referer header
                 request.Headers.Add("HTTP-Referer", "https://trader.app");
-                _logger.LogInformation("Added HTTP-Referer header for OpenRouter request");
+                request.Headers.Add("X-Title", "Trader App");
             }
 
-            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
             
-            _logger.LogInformation("Sending request to {BaseAddress} for {ApiType} analysis", _httpClient.BaseAddress, _apiType);
-
-            var response = await _httpClient.SendAsync(request);
-
-            response.EnsureSuccessStatusCode();
-
-            var responseString = await response.Content.ReadAsStringAsync();
-
-            var responseObject = JsonSerializer.Deserialize<PerplexityResponse>(responseString);
-
-            if (responseObject?.choices == null || responseObject.choices.Length == 0)
+            // Log the complete request details
+            try
             {
-                throw new InvalidOperationException("Invalid response from API");
+                var requestContent = await request.Content.ReadAsStringAsync();
+                var directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ApiLogs");
+                Directory.CreateDirectory(directory);
+                var requestFilename = Path.Combine(directory, $"{symbol}_OpenRouter_Request_{DateTime.UtcNow:yyyyMMdd_HHmmss}.txt");
+                await File.WriteAllTextAsync(requestFilename, 
+                    $"Request URL: {_httpClient.BaseAddress}{request.RequestUri}\n" +
+                    $"Headers:\n{string.Join("\n", request.Headers.Select(h => $"{h.Key}: {string.Join(", ", h.Value)}"))})\n\n" +
+                    $"Content:\n{requestContent}");
+                _logger.LogInformation("Request details saved to {Filename}", requestFilename);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error saving request details");
             }
 
-            // Extract the model used from the response
-            string modelUsed = !string.IsNullOrEmpty(responseObject.model) ? responseObject.model : _model;
-            _logger.LogInformation("{ApiType} selected model: {Model} for analysis of {Symbol}", _apiType, modelUsed, symbol);
+            _logger.LogInformation("Sending request to {BaseAddress} for {ApiType} analysis", _httpClient.BaseAddress, _apiType);
+            _logger.LogDebug("Request content: {Content}", await request.Content.ReadAsStringAsync());
 
-            // Extract the JSON from the response text
-            var responseContent = responseObject.choices[0].message.content;
-
-            var jsonStartIndex = responseContent.IndexOf('{');
-
-            var jsonEndIndex = responseContent.LastIndexOf('}');
-
-            if (jsonStartIndex >= 0 && jsonEndIndex > jsonStartIndex)
+            // Create a cancellation token with a timeout
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(4)); // 4 minute timeout
+            
+            string responseString;
+            string modelUsed;
+            string responseContent;
+            string reasoning = string.Empty;
+            string jsonContent = string.Empty;
+            
+            try
             {
-                var jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
-
-                var sentimentData = JsonSerializer.Deserialize<SentimentData>(jsonContent);
-
-                if (sentimentData != null)
+                var response = await _httpClient.SendAsync(request, cts.Token);
+                
+                // Log response status and headers before reading content
+                _logger.LogInformation("Response Status: {StatusCode}", response.StatusCode);
+                _logger.LogInformation("Response Headers: {Headers}", 
+                    string.Join("\n", response.Headers.Select(h => $"{h.Key}: {string.Join(", ", h.Value)}")));
+                
+                if (!response.IsSuccessStatusCode)
                 {
-                    // Determine trade recommendation based on direction and sentiment
-                    string tradeRecommendation = "None";
+                    responseString = await response.Content.ReadAsStringAsync();
+                    _logger.LogError("API request failed with status code {StatusCode}. Response: {Response}", 
+                        response.StatusCode, responseString);
+                    return CreateFallbackAnalysis(symbol, $"API request failed with status {response.StatusCode}", _model, string.Empty);
+                }
+                
+                responseString = await response.Content.ReadAsStringAsync();
+                
+                // Clean up empty lines at the start
+                responseString = responseString?.TrimStart('\n', '\r', ' ') ?? string.Empty;
+                
+                _logger.LogInformation("Raw response length: {Length} characters", responseString?.Length ?? 0);
+                _logger.LogDebug("Raw API response: {Response}", responseString);
 
-                    if (!string.IsNullOrEmpty(sentimentData.direction))
-                    {
-                        tradeRecommendation = sentimentData.direction.Trim().ToLower() switch
+                if (string.IsNullOrEmpty(responseString))
+                {
+                    throw new InvalidOperationException("Empty response from OpenRouter API");
+                }
+
+                // First parse the OpenRouter wrapper response
+                var openRouterResponse = JsonSerializer.Deserialize<OpenRouterResponse>(responseString);
+                if (openRouterResponse?.Choices == null || openRouterResponse.Choices.Count == 0 || 
+                    string.IsNullOrEmpty(openRouterResponse.Choices[0].Text))
+                {
+                    throw new InvalidOperationException("Invalid response format from OpenRouter API");
+                }
+
+                // Get the actual content from the message
+                responseContent = openRouterResponse.Choices[0].Text;
+                modelUsed = !string.IsNullOrEmpty(openRouterResponse.Model) ? openRouterResponse.Model : _model;
+                
+                _logger.LogDebug("Extracted content from OpenRouter response: {Content}", responseContent);
+            }
+            catch (OperationCanceledException ex)
+            {
+                _logger.LogWarning(ex, "Request timed out. Using fallback analysis.");
+                return CreateFallbackAnalysis(symbol, "Request timed out", _model, string.Empty);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting response from API for {Symbol}", symbol);
+                return CreateFallbackAnalysis(symbol, "Error communicating with API", _model, string.Empty);
+            }
+
+            // Try to find JSON in the response
+            var jsonStartIndex = responseContent.LastIndexOf('{');
+            var jsonEndIndex = responseContent.LastIndexOf('}');
+            
+            if (jsonStartIndex == -1 || jsonEndIndex == -1)
+            {
+                _logger.LogWarning("Could not find valid JSON in response. Attempting to fix response format.");
+                // Try to extract any JSON-like content
+                var matches = System.Text.RegularExpressions.Regex.Matches(responseContent, @"\{[^{}]*\}");
+                if (matches.Count > 0)
+                {
+                    // Take the last match as it's likely the most complete
+                    var lastMatch = matches[matches.Count - 1].Value;
+                    jsonContent = lastMatch;
+                    reasoning = responseContent.Substring(0, responseContent.IndexOf(lastMatch)).Trim();
+                }
+                else
+                {
+                    return CreateFallbackAnalysis(symbol, "Could not extract JSON from response", modelUsed, string.Empty);
+                }
+            }
+            else
+            {
+                jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
+                reasoning = responseContent.Substring(0, jsonStartIndex).Trim();
+            }
+            
+            _logger.LogDebug("Extracted reasoning: {Reasoning}", reasoning);
+            _logger.LogDebug("Extracted JSON: {Json}", jsonContent);
+            
+            try
+            {
+                var options = new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    AllowTrailingCommas = true
+                };
+
+                // Try to clean up the JSON content first
+                jsonContent = CleanupJsonContent(jsonContent);
+                
+                _logger.LogDebug("Cleaned JSON content: {Json}", jsonContent);
+                
+                var sentimentData = JsonSerializer.Deserialize<SentimentData>(jsonContent, options);
+                
+                if (sentimentData == null)
+                {
+                    return CreateFallbackAnalysis(symbol, "Could not parse sentiment data", modelUsed, reasoning);
+                }
+
+                // Store the reasoning in the response object
+                reasoning = responseContent.Substring(0, jsonStartIndex).Trim();
+
+                var sessionInfo = _marketSessionService.GetCurrentSessionInfo(symbol);
+                
+                var result = new SentimentAnalysisResult
+                {
+                    CurrencyPair = symbol,
+                    Sentiment = ParseSentiment(sentimentData.sentiment),
+                    Confidence = sentimentData.confidence,
+                    Factors = sentimentData.factors ?? new List<string>(),
+                    Summary = sentimentData.summary,
+                    Sources = sentimentData.sources ?? new List<string>(),
+                    Timestamp = DateTime.UtcNow,
+                    CurrentPrice = sentimentData.currentPrice,
+                    TradeRecommendation = string.IsNullOrEmpty(sentimentData.direction) ? "None" : 
+                        sentimentData.direction.Trim().ToLower() switch
                         {
                             "buy" => "Buy",
                             "sell" => "Sell",
                             _ => "None"
-                        };
-                    }
-                    
-                    // Get market session information
-                    var sessionInfo = _marketSessionService.GetCurrentSessionInfo(symbol);
-                    
-                    // Create the sentiment analysis result
-                    var result = new SentimentAnalysisResult
-                    {
-                        CurrencyPair = symbol,
-                        Sentiment = ParseSentiment(sentimentData.sentiment),
-                        Confidence = sentimentData.confidence,
-                        Factors = sentimentData.factors ?? new List<string>(),
-                        Summary = sentimentData.summary,
-                        Sources = sentimentData.sources ?? new List<string>(),
-                        Timestamp = DateTime.UtcNow,
-                        CurrentPrice = sentimentData.currentPrice,
-                        TradeRecommendation = tradeRecommendation,
-                        StopLossPrice = sentimentData.stopLossPrice,
-                        TakeProfitPrice = sentimentData.takeProfitPrice,
-                        BestEntryPrice = sentimentData.bestEntryPrice > 0 ? sentimentData.bestEntryPrice : sentimentData.currentPrice,
-                        OrderType = ParseOrderType(sentimentData.orderType, sentimentData.direction, sentimentData.currentPrice, sentimentData.bestEntryPrice),
-                        TimeToBestEntry = !string.IsNullOrEmpty(sentimentData.timeToBestEntry) ? sentimentData.timeToBestEntry : "Unknown",
-                        ValidUntil = ParseValidityPeriod(sentimentData.validityPeriod),
-                        IsSafeToEnterAtCurrentPrice = sentimentData.isSafeToEnterAtCurrentPrice,
-                        CurrentEntryReason = sentimentData.currentEntryReason,
-                        RiskLevel = !string.IsNullOrEmpty(sentimentData.riskLevel) ? sentimentData.riskLevel : "Medium",
-                        MarketSession = new MarketSessionInfo
-                        {
-                            CurrentSession = sessionInfo.CurrentSession.ToString(),
-                            Description = sessionInfo.Description,
-                            LiquidityLevel = sessionInfo.LiquidityLevel,
-                            RecommendedSession = sessionInfo.RecommendedSession.ToString(),
-                            RecommendationReason = sessionInfo.RecommendationReason,
-                            TimeUntilNextSession = FormatTimeSpan(sessionInfo.TimeUntilNextSession),
-                            NextSession = sessionInfo.NextSession.ToString(),
-                            CurrentTimeUtc = sessionInfo.CurrentTimeUtc,
-                            NextSessionStartTimeUtc = sessionInfo.NextSessionStartTimeUtc
                         },
-                        ModelUsed = modelUsed
-                    };
-
-                    // Add session warning if current session is not the recommended one
-                    if (sessionInfo.CurrentSession != sessionInfo.RecommendedSession && result.IsTradeRecommended)
+                    StopLossPrice = sentimentData.stopLossPrice,
+                    TakeProfitPrice = sentimentData.takeProfitPrice,
+                    BestEntryPrice = sentimentData.bestEntryPrice > 0 ? sentimentData.bestEntryPrice : sentimentData.currentPrice,
+                    OrderType = ParseOrderType(sentimentData.orderType, sentimentData.direction, sentimentData.currentPrice, sentimentData.bestEntryPrice),
+                    TimeToBestEntry = !string.IsNullOrEmpty(sentimentData.timeToBestEntry) ? sentimentData.timeToBestEntry : "Unknown",
+                    ValidUntil = ParseValidityPeriod(sentimentData.validityPeriod),
+                    IsSafeToEnterAtCurrentPrice = sentimentData.isSafeToEnterAtCurrentPrice,
+                    CurrentEntryReason = sentimentData.currentEntryReason,
+                    RiskLevel = !string.IsNullOrEmpty(sentimentData.riskLevel) ? sentimentData.riskLevel : "Medium",
+                    MarketSession = new MarketSessionInfo
                     {
-                        // Check if this is a cryptocurrency pair
-                        bool isCrypto = IsCryptoPair(symbol);
-                        
-                        // Only add session warning for forex pairs, not for cryptocurrencies
-                        if (!isCrypto)
-                        {
-                            result.SessionWarning = $"Warning: Current market session ({sessionInfo.CurrentSession}) is not optimal for trading {symbol}. Consider waiting for the {sessionInfo.RecommendedSession} session for better liquidity and trading conditions.";
-                            _logger.LogInformation("Session warning added for {Symbol}: Current session {CurrentSession} is not the recommended {RecommendedSession}", 
-                                symbol, sessionInfo.CurrentSession, sessionInfo.RecommendedSession);
-                        }
-                    }
-                    
-                    // Add position sizing calculations
-                    result.PositionSizing = await _positionSizingService.CalculatePositionSizingAsync(
-                        symbol,
-                        result.CurrentPrice);
-                    
-                    return result;
+                        CurrentSession = sessionInfo.CurrentSession.ToString(),
+                        Description = sessionInfo.Description,
+                        LiquidityLevel = sessionInfo.LiquidityLevel,
+                        RecommendedSession = sessionInfo.RecommendedSession.ToString(),
+                        RecommendationReason = sessionInfo.RecommendationReason,
+                        TimeUntilNextSession = FormatTimeSpan(sessionInfo.TimeUntilNextSession),
+                        NextSession = sessionInfo.NextSession.ToString(),
+                        CurrentTimeUtc = sessionInfo.CurrentTimeUtc,
+                        NextSessionStartTimeUtc = sessionInfo.NextSessionStartTimeUtc
+                    },
+                    ModelUsed = modelUsed,
+                    ModelReasoning = reasoning // Add the reasoning to the result
+                };
+
+                if (sessionInfo.CurrentSession != sessionInfo.RecommendedSession && result.IsTradeRecommended && !IsCryptoPair(symbol))
+                {
+                    result.SessionWarning = $"Warning: Current market session ({sessionInfo.CurrentSession}) is not optimal for trading {symbol}. Consider waiting for the {sessionInfo.RecommendedSession} session for better liquidity and trading conditions.";
                 }
+                
+                result.PositionSizing = await _positionSizingService.CalculatePositionSizingAsync(
+                    symbol,
+                    result.CurrentPrice);
+                
+                // Log successful extraction of reasoning and analysis
+                if (!string.IsNullOrEmpty(result.ModelReasoning))
+                {
+                    _logger.LogInformation("Successfully extracted model reasoning ({Length} characters) for {Symbol}", 
+                        result.ModelReasoning.Length, symbol);
+                }
+                
+                return result;
             }
-            
-            throw new InvalidOperationException("Failed to parse sentiment data from response");
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Error parsing JSON response. Using fallback analysis.");
+                return CreateFallbackAnalysis(symbol, responseContent, modelUsed, reasoning);
+            }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error analyzing sentiment for {Symbol}", symbol);
-            
-            // Return a fallback result
-            return new SentimentAnalysisResult
-            {
-                CurrencyPair = symbol,
-                Sentiment = SentimentType.Neutral,
-                Confidence = 0.5m,
-                Factors = new List<string> { "Error fetching sentiment data" },
-                Summary = "Could not retrieve sentiment data at this time",
-                Sources = new List<string>(),
-                Timestamp = DateTime.UtcNow,
-                ModelUsed = "Error - model information unavailable"
-            };
+            return CreateFallbackAnalysis(symbol, "Error occurred during analysis", _model, string.Empty);
         }
+    }
+
+    /// <summary>
+    /// Creates a fallback analysis when the API response cannot be properly parsed
+    /// </summary>
+    private SentimentAnalysisResult CreateFallbackAnalysis(string symbol, string responseContent, string modelUsed, string reasoning)
+    {
+        var sessionInfo = _marketSessionService.GetCurrentSessionInfo(symbol);
+        
+        // Try to determine sentiment from the response content
+        var sentiment = SentimentType.Neutral;
+        if (responseContent.Contains("bullish", StringComparison.OrdinalIgnoreCase))
+            sentiment = SentimentType.Bullish;
+        else if (responseContent.Contains("bearish", StringComparison.OrdinalIgnoreCase))
+            sentiment = SentimentType.Bearish;
+
+        return new SentimentAnalysisResult
+        {
+            CurrencyPair = symbol,
+            Sentiment = sentiment,
+            Confidence = 0.5m,
+            Factors = new List<string> { "Analysis based on limited data due to parsing error" },
+            Summary = "Could not generate detailed analysis. Please try again.",
+            Sources = new List<string>(),
+            Timestamp = DateTime.UtcNow,
+            TradeRecommendation = "None",
+            CurrentPrice = 0,
+            MarketSession = new MarketSessionInfo
+            {
+                CurrentSession = sessionInfo.CurrentSession.ToString(),
+                Description = sessionInfo.Description,
+                LiquidityLevel = sessionInfo.LiquidityLevel,
+                RecommendedSession = sessionInfo.RecommendedSession.ToString(),
+                RecommendationReason = sessionInfo.RecommendationReason,
+                TimeUntilNextSession = FormatTimeSpan(sessionInfo.TimeUntilNextSession),
+                NextSession = sessionInfo.NextSession.ToString(),
+                CurrentTimeUtc = sessionInfo.CurrentTimeUtc,
+                NextSessionStartTimeUtc = sessionInfo.NextSessionStartTimeUtc
+            },
+            ModelUsed = modelUsed,
+            ModelReasoning = reasoning
+        };
     }
 
     /// <summary>
@@ -472,11 +690,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     {
         var sb = new StringBuilder();
         
-        sb.AppendLine($"Analyze the following chart data for {symbol} and provide a detailed technical analysis with trading recommendation.");
-        sb.AppendLine();
-        
-        sb.AppendLine("Focus on the 4-hour and 1-hour timeframes for reliable signals.");
-        sb.AppendLine("Ignore short-term noise and prioritize medium-term trends.");
+        sb.AppendLine($"Analyze chart data for {symbol}. Focus on 4-hour and 1-hour timeframes. Your response must be a valid JSON object following the schema below.");
         sb.AppendLine();
         
         // Add 4-hour candles (highest priority)
@@ -507,15 +721,9 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
 
         // We're skipping daily and 5-minute data entirely
         
-        sb.AppendLine("Based on this data, provide a comprehensive analysis including:");
-        sb.AppendLine("1. Current market structure and trend direction on each timeframe");
-        sb.AppendLine("2. Key support and resistance levels");
-        sb.AppendLine("3. Important technical indicators and patterns");
-        sb.AppendLine("4. Trading recommendation with entry, stop loss, and take profit levels");
-        sb.AppendLine("5. If the current price isn't ideal for entry, suggest a better entry price");
+        sb.AppendLine("Based on this data, provide a comprehensive analysis in the following JSON format:");
         sb.AppendLine();
         
-        sb.AppendLine("Provide your analysis in the following JSON format:");
         sb.AppendLine("{");
         sb.AppendLine("  \"sentiment\": \"Bullish\", \"Bearish\", or \"Neutral\",");
         sb.AppendLine("  \"confidence\": 0.0-1.0,");
@@ -523,71 +731,46 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         sb.AppendLine("  \"direction\": \"Buy\", \"Sell\", or \"None\",");
         sb.AppendLine("  \"stopLossPrice\": stop loss price as decimal,");
         sb.AppendLine("  \"takeProfitPrice\": target price as decimal,");
-        sb.AppendLine("  \"bestEntryPrice\": optimal entry price as decimal (can be different from current price),");
+        sb.AppendLine("  \"bestEntryPrice\": optimal entry price as decimal,");
         sb.AppendLine("  \"orderType\": \"Market\", \"Limit\", or \"Stop\",");
-        sb.AppendLine("  \"timeToBestEntry\": \"estimated time until best entry price is reached (e.g., '2-3 hours', '1-2 days')\",");
-        sb.AppendLine("  \"validityPeriod\": \"how long this recommendation is valid for (e.g., '24 hours', '3 days')\",");
+        sb.AppendLine("  \"timeToBestEntry\": \"estimated time until best entry price is reached\",");
+        sb.AppendLine("  \"validityPeriod\": \"how long this recommendation is valid for\",");
         sb.AppendLine("  \"isSafeToEnterAtCurrentPrice\": true or false,");
         sb.AppendLine("  \"currentEntryReason\": \"explanation of why it's safe or unsafe to enter at current price\",");
         sb.AppendLine("  \"riskLevel\": \"Low\", \"Medium\", \"High\", or \"Very High\",");
         sb.AppendLine("  \"factors\": [\"list\", \"of\", \"factors\"],");
         sb.AppendLine("  \"summary\": \"brief summary of analysis\",");
-        sb.AppendLine("  \"sources\": [\"list\", \"of\", \"sources\"]");
+        sb.AppendLine("  \"sources\": [\"list\", \"of\", \"sources\"],");
+        sb.AppendLine("  \"inOutPlay\": {");
+        sb.AppendLine("    \"available\": true or false,");
+        sb.AppendLine("    \"direction\": \"Buy\" or \"Sell\",");
+        sb.AppendLine("    \"entryPrice\": decimal price for quick entry,");
+        sb.AppendLine("    \"stopLoss\": decimal price for quick stop loss,");
+        sb.AppendLine("    \"takeProfit\": decimal price for quick take profit,");
+        sb.AppendLine("    \"timeframe\": \"expected time in market (e.g., '5-15 minutes')\",");
+        sb.AppendLine("    \"reason\": \"brief explanation of the quick trade setup\"");
+        sb.AppendLine("  }");
         sb.AppendLine("}");
         sb.AppendLine();
 
-        sb.AppendLine("Only recommend a trade if there is a clear setup with a good risk-reward ratio (at least 1.5:1). If there's no clear trade opportunity, set direction to \"None\".");
+        sb.AppendLine("IMPORTANT: Your response must be a valid JSON object following this schema exactly. Do not include any text outside the JSON object.");
         sb.AppendLine();
 
-        sb.AppendLine("If the current price isn't ideal for entry, suggest a better entry price in the bestEntryPrice field. This could be at a key support/resistance level, a retracement level, or a better risk-reward setup. However, don't be too conservative with the best entry price - if the current price is within 0.5% of your ideal entry for forex pairs (or 2% for crypto), consider the current price acceptable.");
+        sb.AppendLine("Rules for the analysis:");
+        sb.AppendLine("1. Only recommend a trade if there is a clear setup with a good risk-reward ratio (at least 1.5:1)");
+        sb.AppendLine("2. If there's no clear trade opportunity, set direction to \"None\"");
+        sb.AppendLine("3. For orderType: Use \"Market\" for immediate execution, \"Limit\" for waiting for better price, \"Stop\" for breakout confirmation");
+        sb.AppendLine("4. Set isSafeToEnterAtCurrentPrice to true only if entering at current price is acceptable");
+        sb.AppendLine("5. For riskLevel: \"Low\" for strong confirmation, \"Medium\" for standard trades, \"High\" for less confirmation, \"Very High\" for counter-trend trades");
         sb.AppendLine();
 
-        sb.AppendLine("For the orderType field:");
-        sb.AppendLine("- Use \"Market\" if the trade should be executed immediately at the current price");
-        sb.AppendLine("- For Buy orders:");
-        sb.AppendLine("  - Use \"Limit\" if the best entry price is BELOW the current price (waiting for price to drop)");
-        sb.AppendLine("  - Use \"Stop\" if the best entry price is ABOVE the current price (waiting for breakout confirmation)");
-        sb.AppendLine("- For Sell orders:");
-        sb.AppendLine("  - Use \"Limit\" if the best entry price is ABOVE the current price (waiting for price to rise)");
-        sb.AppendLine("  - Use \"Stop\" if the best entry price is BELOW the current price (waiting for breakdown confirmation)");
-        sb.AppendLine();
-
-        sb.AppendLine("Note: The system will automatically correct the order type based on the relationship between current price and best entry price if needed.");
-        sb.AppendLine();
-
-        sb.AppendLine("For the isSafeToEnterAtCurrentPrice field:");
-        sb.AppendLine("- Set to true if entering at the current price is acceptable, even if not optimal");
-        sb.AppendLine("- Set to false ONLY if entering at the current price would significantly reduce the risk-reward ratio or substantially increase risk");
-        sb.AppendLine("- Be more lenient with this flag - if the trade still has a positive risk-reward ratio at current price, set this to true");
-        sb.AppendLine("- Consider factors like volatility, proximity to key levels, and overall market conditions");
-        sb.AppendLine();
-
-        sb.AppendLine("For the riskLevel field:");
-        sb.AppendLine("- Set to \"Low\" for trades with strong confirmation, clear support/resistance, and favorable market conditions");
-        sb.AppendLine("- Set to \"Medium\" for standard trades with reasonable confirmation and acceptable risk-reward");
-        sb.AppendLine("- Set to \"High\" for trades with less confirmation, higher volatility, or proximity to key levels");
-        sb.AppendLine("- Set to \"Very High\" for counter-trend trades, trades with minimal confirmation, or during high-impact news events");
-        sb.AppendLine("- Consider factors like trend strength, confirmation signals, volatility, and proximity to key levels");
-        sb.AppendLine();
-
-        sb.AppendLine("For the currentEntryReason field:");
-        sb.AppendLine("- Provide a detailed explanation (1-3 sentences) of why it's safe or unsafe to enter at the current price");
-        sb.AppendLine("- If safe, explain why the current price is still a good entry despite not being optimal");
-        sb.AppendLine("- If unsafe, explain specifically what risks or disadvantages exist at the current price");
-        sb.AppendLine("- Include specific price levels, risk-reward calculations, or technical factors in your explanation");
-        sb.AppendLine("- This helps traders understand exactly why they should wait or can proceed immediately");
-        sb.AppendLine();
-
-        sb.AppendLine("For the timeToBestEntry field:");
-        sb.AppendLine("- Provide an estimate of how long it might take for the price to reach the best entry level");
-        sb.AppendLine("- Use formats like \"2-3 hours\", \"1-2 days\", or \"Unknown\" if it's not possible to estimate");
-        sb.AppendLine("- Base this on recent price action, volatility, and market conditions");
-        sb.AppendLine();
-
-        sb.AppendLine("For the validityPeriod field:");
-        sb.AppendLine("- Specify how long this recommendation should be considered valid");
-        sb.AppendLine("- Use formats like \"24 hours\", \"3 days\", \"1 week\"");
-        sb.AppendLine("- Consider market conditions, upcoming events, and the timeframe of the analysis");
+        sb.AppendLine("For inOutPlay: Only set available=true if ALL of these conditions are met:");
+        sb.AppendLine("1. Clear price action setup");
+        sb.AppendLine("2. Tight stop loss (typically 5-10 pips for major pairs)");
+        sb.AppendLine("3. Reward:risk ratio at least 1.5:1");
+        sb.AppendLine("4. Strong momentum in the intended direction");
+        sb.AppendLine("5. No major economic news expected in the next 30 minutes");
+        sb.AppendLine("6. Price is at a key level");
         
         return sb.ToString();
     }
@@ -891,10 +1074,56 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             MarketSession = analysis.MarketSession,
             SessionWarning = analysis.SessionWarning,
             PositionSizing = analysis.PositionSizing,
-            ModelUsed = analysis.ModelUsed
+            ModelUsed = analysis.ModelUsed,
+            ModelReasoning = analysis.ModelReasoning, // Add the reasoning to the recommendation
+            InOutPlay = analysis.InOutPlay // Add the InOutPlay data
         };
         
         return recommendation;
+    }
+
+    /// <summary>
+    /// Cleans up potentially malformed JSON content
+    /// </summary>
+    private string CleanupJsonContent(string content)
+    {
+        try
+        {
+            // Remove any leading/trailing whitespace
+            content = content.Trim();
+            
+            // If the content starts with "REASONING" or similar, try to find the actual JSON
+            if (!content.StartsWith("{"))
+            {
+                var jsonStart = content.IndexOf('{');
+                if (jsonStart >= 0)
+                {
+                    content = content.Substring(jsonStart);
+                }
+            }
+            
+            // Find the last complete JSON object
+            var lastObjectStart = content.LastIndexOf('{');
+            var lastObjectEnd = content.LastIndexOf('}');
+            
+            if (lastObjectStart >= 0 && lastObjectEnd > lastObjectStart)
+            {
+                content = content.Substring(lastObjectStart, lastObjectEnd - lastObjectStart + 1);
+            }
+            
+            // Remove any trailing commas before closing braces
+            content = System.Text.RegularExpressions.Regex.Replace(content, @",(\s*})", "$1");
+            
+            // Ensure all property names are properly quoted
+            content = System.Text.RegularExpressions.Regex.Replace(content, @"([{,]\s*)(\w+)(\s*:)", "$1\"$2\"$3");
+            
+            return content;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error cleaning up JSON content");
+            return content; // Return original content if cleanup fails
+        }
     }
 
     #region API Response Classes
@@ -906,6 +1135,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
     {
         public Choice[] choices { get; set; } = Array.Empty<Choice>();
         public string model { get; set; } = string.Empty;
+        public string reasoning { get; set; } = string.Empty; // Store extracted reasoning
     }
 
     /// <summary>
@@ -945,6 +1175,21 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         public List<string>? factors { get; set; }
         public string summary { get; set; } = string.Empty;
         public List<string>? sources { get; set; }
+        public InOutPlayData? inOutPlay { get; set; }
+    }
+
+    /// <summary>
+    /// Structure for quick scalping trade opportunities
+    /// </summary>
+    private class InOutPlayData
+    {
+        public bool available { get; set; } = false;
+        public string direction { get; set; } = string.Empty;
+        public decimal entryPrice { get; set; }
+        public decimal stopLoss { get; set; }
+        public decimal takeProfit { get; set; }
+        public string timeframe { get; set; } = string.Empty;
+        public string reason { get; set; } = string.Empty;
     }
     
     /// <summary>
@@ -966,6 +1211,32 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
         public string currentEntryReason { get; set; } = string.Empty;
         public List<string>? factors { get; set; }
         public string rationale { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Response structure from the OpenRouter API.
+    /// </summary>
+    private class OpenRouterResponse
+    {
+        public required string Id { get; set; }
+        public required string Provider { get; set; }
+        public required string Model { get; set; }
+        public required List<OpenRouterChoice> Choices { get; set; }
+        public required OpenRouterUsage Usage { get; set; }
+    }
+
+    public class OpenRouterChoice
+    {
+        public required string Text { get; set; }
+        public required int Index { get; set; }
+        public required string FinishReason { get; set; }
+    }
+
+    public class OpenRouterUsage
+    {
+        public required int PromptTokens { get; set; }
+        public required int CompletionTokens { get; set; }
+        public required int TotalTokens { get; set; }
     }
     
     #endregion
