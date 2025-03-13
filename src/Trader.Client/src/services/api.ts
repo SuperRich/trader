@@ -136,5 +136,39 @@ export const tradingApi = {
       }
       throw new ApiError('Failed to connect to the analysis service');
     }
+  },
+
+  getMarketMovers: async (provider: string = 'TwelveData', count: number = 1): Promise<any> => {
+    try {
+      const response = await fetch(
+        `${config.apiBaseUrl}/api/market-movers/forex/ema-filtered?provider=${provider}&Count=${count}`,
+        {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
+          }
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Market Movers API Error:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorText
+        });
+        throw new ApiError(`Failed to get market movers: ${errorText}`);
+      }
+
+      const data = await response.json();
+      console.log('Market movers response:', data);
+      return data;
+    } catch (error) {
+      console.error('Error in getMarketMovers:', error);
+      if (error instanceof ApiError) {
+        throw error;
+      }
+      throw new ApiError('Failed to connect to the market movers service');
+    }
   }
 }; 

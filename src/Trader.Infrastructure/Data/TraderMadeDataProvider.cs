@@ -175,8 +175,8 @@ public class TraderMadeDataProvider : IForexDataProvider
             _logger.LogWarning("TraderMade API limits minute data to 2 working days. Requested {Count} candles but date range is limited.", candleCount);
         }
         
-        string from = startDate.ToString("yyyy-MM-dd");
-        string to = endDate.ToString("yyyy-MM-dd");
+        string from = startDate.ToString("yyyy-MM-dd-HH:mm");
+        string to = endDate.ToString("yyyy-MM-dd-HH:mm");
         
         _logger.LogInformation("Date range: from {From} to {To}", from, to);
         

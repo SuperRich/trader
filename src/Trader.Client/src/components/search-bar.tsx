@@ -17,19 +17,32 @@ const SearchBar = () => {
   const [error, setError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<TradingAnalysis | null>(null);
   const [selectedProvider, setSelectedProvider] = useState('TwelveData');
+  const [marketMoversCount, setMarketMoversCount] = useState(1);
+  const [marketMovers, setMarketMovers] = useState<any[]>([]);
+  const [isLoadingMovers, setIsLoadingMovers] = useState(false);
 
   // Available providers
   const providers = ['TwelveData', 'Polygon', 'Mock', 'TraderMade'];
 
-  // Mock data for top movers
-  const topMovers = [
-    { pair: 'EUR/USD', change: +0.72, price: '1.1234' },
-    { pair: 'BTC/USD', change: +3.25, price: '52,345.67' },
-    { pair: 'GBP/JPY', change: -0.44, price: '165.432' },
-    { pair: 'ETH/USD', change: +2.18, price: '3,654.32' },
-    { pair: 'USD/CAD', change: -0.65, price: '1.2765' },
-    { pair: 'XRP/USD', change: +5.43, price: '0.7623' },
-  ];
+  const handleGetTopMovers = async () => {
+    setShowTopMovers(true);
+    setIsLoadingMovers(true);
+    setError(null);
+
+    try {
+      const data = await tradingApi.getMarketMovers(selectedProvider, marketMoversCount);
+      setMarketMovers(data);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(err.message);
+      } else {
+        setError('An unexpected error occurred while fetching market movers');
+      }
+      console.error('Market movers error:', err);
+    } finally {
+      setIsLoadingMovers(false);
+    }
+  };
 
   const handleAnalyzeClick = () => {
     setShowPairInput(true);
@@ -65,10 +78,6 @@ const SearchBar = () => {
     }
   };
 
-  const handleGetTopMovers = () => {
-    setShowTopMovers(true);
-  };
-
   const handleSelectPair = (pair: string) => {
     setPairInput(pair);
     setAnalysisPair(pair);
@@ -92,28 +101,85 @@ const SearchBar = () => {
             </Button>
           ) : (
             <Card className="w-full bg-zinc-900 border-zinc-800 p-4">
-              <h3 className="text-lg font-medium text-white mb-3 text-center">Today's Top Movers</h3>
-              <div className="grid grid-cols-2 gap-3">
-                {topMovers.map((mover, index) => (
-                  <div
-                    key={index}
-                    className="bg-zinc-800 p-3 rounded-lg flex justify-between items-center cursor-pointer hover:bg-zinc-700 transition-colors"
-                    onClick={() => handleSelectPair(mover.pair)}
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium text-white">Today's Top Movers</h3>
+                <div className="flex items-center gap-2">
+                  <Select value={selectedProvider} onValueChange={setSelectedProvider}>
+                    <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white w-32">
+                      <SelectValue placeholder="Select provider" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-zinc-800 border-zinc-700">
+                      {providers.map((provider) => (
+                        <SelectItem key={provider} value={provider} className="text-white hover:bg-zinc-700">
+                          {provider}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select 
+                    value={marketMoversCount.toString()} 
+                    onValueChange={(value) => setMarketMoversCount(parseInt(value))}
                   >
-                    <div>
-                      <div className="font-medium text-white">{mover.pair}</div>
-                      <div className="text-sm text-zinc-400">{mover.price}</div>
-                    </div>
-                    <div className={`flex items-center ${mover.change >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                      {mover.change >= 0 ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
-                      <span className="font-medium ml-1">{mover.change >= 0 ? '+' : ''}{mover.change}%</span>
-                    </div>
-                  </div>
-                ))}
+                    <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white w-20">
+                      <SelectValue placeholder="Count" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-zinc-800 border-zinc-700">
+                      {[1, 2, 3, 4, 5].map((count) => (
+                        <SelectItem key={count} value={count.toString()} className="text-white hover:bg-zinc-700">
+                          {count}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    onClick={handleGetTopMovers}
+                    className="bg-teal-600 hover:bg-teal-700 text-white"
+                    disabled={isLoadingMovers}
+                  >
+                    {isLoadingMovers ? (
+                      <>
+                        <Loader2 size={18} className="animate-spin mr-2" />
+                        Loading...
+                      </>
+                    ) : (
+                      'Refresh'
+                    )}
+                  </Button>
+                </div>
               </div>
-              <p className="text-xs text-zinc-400 mt-4 text-center">
-                Click on any pair to analyze
-              </p>
+              <div className="grid grid-cols-2 gap-3">
+                {isLoadingMovers ? (
+                  <div className="col-span-2 flex justify-center py-8">
+                    <Loader2 size={24} className="animate-spin text-teal-500" />
+                  </div>
+                ) : marketMovers.length > 0 ? (
+                  marketMovers.map((mover, index) => (
+                    <div
+                      key={index}
+                      className="bg-zinc-800 p-3 rounded-lg flex justify-between items-center cursor-pointer hover:bg-zinc-700 transition-colors"
+                      onClick={() => handleSelectPair(mover.symbol)}
+                    >
+                      <div>
+                        <div className="font-medium text-white">{mover.symbol}</div>
+                        <div className="text-sm text-zinc-400">{mover.price}</div>
+                      </div>
+                      <div className={`flex items-center ${mover.change >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                        {mover.change >= 0 ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
+                        <span className="font-medium ml-1">{mover.change >= 0 ? '+' : ''}{mover.change}%</span>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="col-span-2 text-center py-4 text-zinc-400">
+                    No market movers data available
+                  </div>
+                )}
+              </div>
+              {error && (
+                <Alert variant="destructive" className="mt-4">
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
             </Card>
           )}
         </div>

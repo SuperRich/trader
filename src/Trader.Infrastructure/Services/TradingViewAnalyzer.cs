@@ -114,15 +114,16 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             var candleTasks = new[]
             {
                 _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 24),
-                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 12)
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 12),
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Day1, 30)  // Get 30 days of daily data
             };
             
             await Task.WhenAll(candleTasks);
             
             var candles1h = await candleTasks[0];
             var candles4h = await candleTasks[1];
+            var candles1d = await candleTasks[2];
             var candles5m = new List<CandleData>();
-            var candles1d = new List<CandleData>();
             
             await SaveChartDataToFile(symbol, candles5m, candles1h, candles4h, candles1d);
 
@@ -751,11 +752,24 @@ Always verify your information with reliable sources and include citations. Be a
     {
         var sb = new StringBuilder();
         
-        sb.AppendLine($"Analyze chart data for {symbol}. Focus on 4-hour and 1-hour timeframes. Your response must be a valid JSON object following the schema below.");
+        sb.AppendLine($"Analyze chart data for {symbol}. Focus on daily, 4-hour, and 1-hour timeframes. Your response must be a valid JSON object following the schema below.");
         sb.AppendLine();
         
-        // Add 4-hour candles (highest priority)
-        sb.AppendLine("## 4-Hour Timeframe (Most Important)");
+        // Add daily candles (highest priority)
+        sb.AppendLine("## Daily Timeframe (Most Important)");
+        if (candles1d.Count > 0)
+        {
+            sb.AppendLine($"Last {candles1d.Count} daily candles:");
+            AppendCandleData(sb, candles1d);
+        }
+        else
+        {
+            sb.AppendLine("No daily data available.");
+        }
+        sb.AppendLine();
+        
+        // Add 4-hour candles (second priority)
+        sb.AppendLine("## 4-Hour Timeframe (Important)");
         if (candles4h.Count > 0)
         {
             sb.AppendLine($"Last {candles4h.Count} 4-hour candles:");
@@ -767,7 +781,7 @@ Always verify your information with reliable sources and include citations. Be a
         }
         sb.AppendLine();
         
-        // Add 1-hour candles (second priority)
+        // Add 1-hour candles (third priority)
         sb.AppendLine("## 1-Hour Timeframe (Important)");
         if (candles1h.Count > 0)
         {
