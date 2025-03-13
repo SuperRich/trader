@@ -4,6 +4,25 @@
 .idea.*.iml
 *.DotSettings.user
 
+# Configuration and Environment Files
+.env
+appsettings.json
+appSettings.json
+appsettings.*.json
+appSettings.*.json
+appsettings.Development.json
+appSettings.Development.json
+appsettings.Production.json
+appSettings.Production.json
+**/appsettings.json
+**/appSettings.json
+**/appsettings.*.json
+**/appSettings.*.json
+**/appsettings.Development.json
+**/appSettings.Development.json
+**/appsettings.Production.json
+**/appSettings.Production.json
+
 # Visual Studio
 .vs/
 *.user
