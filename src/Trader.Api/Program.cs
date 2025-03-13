@@ -108,35 +108,31 @@ public class Program
         builder.Services.AddSingleton<IForexDataProviderFactory, ForexDataProviderFactory>();
         
         // Register data providers
+        if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
+        {
+            builder.Services.AddHttpClient<PolygonDataProvider>();
+            builder.Services.AddSingleton<PolygonDataProvider>();
+            Console.WriteLine("Registered Polygon data provider");
+        }
+        
+        if (!string.IsNullOrEmpty(builder.Configuration["TwelveData:ApiKey"]))
+        {
+            builder.Services.AddHttpClient<TwelveDataProvider>();
+            builder.Services.AddSingleton<TwelveDataProvider>();
+            Console.WriteLine("Registered TwelveData provider");
+        }
+        
         if (!string.IsNullOrEmpty(builder.Configuration["TraderMade:ApiKey"]))
         {
             builder.Services.AddHttpClient<TraderMadeDataProvider>();
             builder.Services.AddSingleton<TraderMadeDataProvider>();
-            builder.Services.AddSingleton<IForexDataProvider>(sp => sp.GetRequiredService<TraderMadeDataProvider>());
-            Console.WriteLine("Using TraderMade as default data provider");
-        }
-        else if (!string.IsNullOrEmpty(builder.Configuration["TwelveData:ApiKey"]))
-        {
-            builder.Services.AddHttpClient<TwelveDataProvider>();
-            builder.Services.AddSingleton<TwelveDataProvider>();
-            builder.Services.AddSingleton<IForexDataProvider>(sp => sp.GetRequiredService<TwelveDataProvider>());
-            Console.WriteLine("Using TwelveData as default data provider");
-        }
-        else if (!string.IsNullOrEmpty(builder.Configuration["Polygon:ApiKey"]))
-        {
-            builder.Services.AddHttpClient<PolygonDataProvider>();
-            builder.Services.AddSingleton<PolygonDataProvider>();
-            builder.Services.AddSingleton<IForexDataProvider>(sp => sp.GetRequiredService<PolygonDataProvider>());
-            Console.WriteLine("Using Polygon as default data provider");
+            Console.WriteLine("Registered TraderMade provider");
         }
         
         // Always register the mock provider last as a fallback
         builder.Services.AddSingleton<ForexDataProvider>();
-        if (!builder.Services.Any(s => s.ServiceType == typeof(IForexDataProvider)))
-        {
-            builder.Services.AddSingleton<IForexDataProvider>(sp => sp.GetRequiredService<ForexDataProvider>());
-            Console.WriteLine("Using mock forex data provider as default");
-        }
+        builder.Services.AddSingleton<IForexDataProvider>(sp => sp.GetRequiredService<ForexDataProvider>());
+        Console.WriteLine("Registered mock forex data provider as fallback");
         
         // Register sentiment analyzers
         if (!string.IsNullOrEmpty(builder.Configuration["OpenRouter:ApiKey"]) || !string.IsNullOrEmpty(builder.Configuration["TRADER_OPENROUTER_API_KEY"]))

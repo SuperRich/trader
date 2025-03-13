@@ -28,9 +28,17 @@ public class TwelveDataProvider : IForexDataProvider
         _apiKey = configuration["TwelveData:ApiKey"] ?? configuration["TRADER_TWELVEDATA_API_KEY"] 
             ?? throw new ArgumentNullException(nameof(configuration), "TwelveData API key is required");
         
-        // Set up the HttpClient
+        // Set up the HttpClient with no caching
         _httpClient.BaseAddress = new Uri(BaseUrl);
         _httpClient.DefaultRequestHeaders.Add("User-Agent", "TraderApp/1.0");
+        _httpClient.DefaultRequestHeaders.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue
+        {
+            NoCache = true,
+            NoStore = true,
+            MustRevalidate = true,
+            MaxAge = TimeSpan.Zero
+        };
+        _httpClient.DefaultRequestHeaders.Add("Pragma", "no-cache");
     }
 
     /// <summary>
@@ -53,13 +61,28 @@ public class TwelveDataProvider : IForexDataProvider
         // Map timeframe to TwelveData interval
         string interval = MapTimeframeToInterval(timeframe);
         
-        // Build the API endpoint URL
-        string endpoint = $"/time_series?symbol={formattedSymbol}&interval={interval}&outputsize={candleCount}&apikey={_apiKey}";
+        // Add timestamp to prevent caching
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        
+        string endpoint = $"/time_series?" +
+            $"symbol={formattedSymbol}" +
+            $"&interval={interval}" +
+            $"&outputsize={candleCount}" +
+            $"&timezone=UTC" +
+            $"&order=DESC" +
+            $"&apikey={_apiKey}" +
+            $"&_={timestamp}"; // Cache-busting parameter
         
         _logger.LogInformation("Using TwelveData endpoint: {Endpoint}", endpoint);
         
         // Make the API request
         var response = await _httpClient.GetAsync(endpoint);
+        
+        // Log response headers to check for caching directives
+        foreach (var header in response.Headers)
+        {
+            _logger.LogInformation("Response header: {Key} = {Value}", header.Key, string.Join(", ", header.Value));
+        }
         
         // Check if the request was successful
         if (!response.IsSuccessStatusCode)
@@ -73,6 +96,8 @@ public class TwelveDataProvider : IForexDataProvider
         
         // Parse the response
         var responseContent = await response.Content.ReadAsStringAsync();
+        _logger.LogInformation("TwelveData response: {Response}", responseContent);
+        
         var twelveDataResponse = JsonSerializer.Deserialize<TwelveDataResponse>(responseContent);
         
         if (twelveDataResponse?.values == null || !twelveDataResponse.values.Any())
@@ -81,23 +106,27 @@ public class TwelveDataProvider : IForexDataProvider
             throw new InvalidOperationException($"No data returned from TwelveData for symbol {symbol}");
         }
         
-        // Convert to our CandleData format
+        // Convert to our CandleData format and log the timestamps
         var candles = twelveDataResponse.values
-            .Select(quote => new CandleData
-            {
-                Timestamp = DateTime.Parse(quote.datetime),
-                Open = decimal.Parse(quote.open),
-                High = decimal.Parse(quote.high),
-                Low = decimal.Parse(quote.low),
-                Close = decimal.Parse(quote.close),
-                Volume = quote.volume != null ? double.Parse(quote.volume) : 0
+            .Select(quote => {
+                var candle = new CandleData
+                {
+                    Timestamp = DateTime.Parse(quote.datetime),
+                    Open = decimal.Parse(quote.open),
+                    High = decimal.Parse(quote.high),
+                    Low = decimal.Parse(quote.low),
+                    Close = decimal.Parse(quote.close),
+                    Volume = quote.volume != null ? double.Parse(quote.volume) : 0
+                };
+                _logger.LogInformation("Candle timestamp: {Timestamp}", candle.Timestamp);
+                return candle;
             })
             .OrderBy(c => c.Timestamp)
             .ToList();
             
-        _logger.LogInformation("Successfully retrieved {Count} candles for {Symbol}", candles.Count, symbol);
+        _logger.LogInformation("Successfully retrieved {Count} candles for {Symbol}. Latest candle timestamp: {LatestTimestamp}", 
+            candles.Count, symbol, candles.LastOrDefault()?.Timestamp);
         
-        // If we don't have enough candles, log a warning
         if (candles.Count < candleCount)
         {
             _logger.LogWarning("Only {ActualCount} candles available for {Symbol}, but {RequestedCount} were requested", 

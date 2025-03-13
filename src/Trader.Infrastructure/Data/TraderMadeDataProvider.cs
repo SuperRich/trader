@@ -178,6 +178,8 @@ public class TraderMadeDataProvider : IForexDataProvider
         string from = startDate.ToString("yyyy-MM-dd");
         string to = endDate.ToString("yyyy-MM-dd");
         
+        _logger.LogInformation("Date range: from {From} to {To}", from, to);
+        
         // Map timeframe to TraderMade interval
         // TraderMade formats: minute, hourly, daily
         string interval;

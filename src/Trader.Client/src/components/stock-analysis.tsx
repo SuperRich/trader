@@ -14,18 +14,23 @@ const StockAnalysis = ({ pair, analysis }: StockAnalysisProps) => {
   // Format metrics based on analysis
   const metrics = [
     { 
-      name: 'Entry Price', 
-      value: analysis.entryPrice.toFixed(pair.includes('BTC') ? 2 : 4), 
+      name: 'Current Price', 
+      value: analysis.currentPrice.toFixed(pair.includes('BTC') ? 2 : 4), 
+      status: 'neutral' 
+    },
+    { 
+      name: 'Best Entry', 
+      value: analysis.bestEntryPrice.toFixed(pair.includes('BTC') ? 2 : 4), 
       status: 'neutral' 
     },
     { 
       name: 'Stop Loss', 
-      value: analysis.stopLoss.toFixed(pair.includes('BTC') ? 2 : 4), 
+      value: analysis.stopLossPrice.toFixed(pair.includes('BTC') ? 2 : 4), 
       status: 'negative' 
     },
     { 
       name: 'Take Profit', 
-      value: analysis.takeProfit.toFixed(pair.includes('BTC') ? 2 : 4), 
+      value: analysis.takeProfitPrice.toFixed(pair.includes('BTC') ? 2 : 4), 
       status: 'positive' 
     },
     { 
@@ -43,7 +48,7 @@ const StockAnalysis = ({ pair, analysis }: StockAnalysisProps) => {
             <h2 className="text-2xl font-bold text-white">{pair}</h2>
             <div className="flex items-center mt-1">
               <span className="text-xl font-medium text-white">
-                {pair.includes('/USD') ? '$' : ''}{analysis.entryPrice.toFixed(pair.includes('BTC') ? 2 : 4)}
+                {pair.includes('/USD') ? '$' : ''}{analysis.currentPrice.toFixed(pair.includes('BTC') ? 2 : 4)}
               </span>
               <div className={`flex items-center ml-3 ${isPositive ? 'text-green-500' : 'text-red-500'}`}>
                 {isPositive ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
@@ -105,15 +110,41 @@ const StockAnalysis = ({ pair, analysis }: StockAnalysisProps) => {
         </div>
 
         <div className="mt-6 pt-4 border-t border-zinc-800">
-          <h3 className="text-lg font-semibold text-white mb-2">Rationale</h3>
+          <h3 className="text-lg font-semibold text-white mb-2">Analysis</h3>
           <p className="text-zinc-300 text-sm leading-relaxed">
-            {analysis.rationale}
+            {analysis.summary}
           </p>
         </div>
 
+        {analysis.positionSizing && (
+          <div className="mt-6 pt-4 border-t border-zinc-800">
+            <h3 className="text-lg font-semibold text-white mb-2">Position Sizing</h3>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-zinc-800 p-3 rounded-lg">
+                <div className="text-zinc-400 text-sm">Lot Size</div>
+                <div className="text-lg font-medium text-white">
+                  {analysis.positionSizing.lotSize.toFixed(2)}
+                </div>
+              </div>
+              <div className="bg-zinc-800 p-3 rounded-lg">
+                <div className="text-zinc-400 text-sm">Risk Amount</div>
+                <div className="text-lg font-medium text-white">
+                  ${analysis.positionSizing.riskAmount.toFixed(2)}
+                </div>
+              </div>
+              <div className="bg-zinc-800 p-3 rounded-lg">
+                <div className="text-zinc-400 text-sm">Potential Profit</div>
+                <div className="text-lg font-medium text-green-500">
+                  ${analysis.positionSizing.potentialProfit.toFixed(2)}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="mt-6 pt-4 border-t border-zinc-800 text-center">
           <div className="text-sm text-zinc-400">
-            This analysis is powered by AI and based on technical analysis. Always do your own research before making trading decisions.
+            Analysis powered by {analysis.modelUsed || 'AI'} • Valid until {new Date(analysis.validUntil).toLocaleString()}
           </div>
         </div>
       </Card>

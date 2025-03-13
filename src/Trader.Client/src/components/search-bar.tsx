@@ -2,17 +2,11 @@ import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { TrendingUp, ArrowUp, ArrowDown, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import StockAnalysis from './stock-analysis';
 import { Card } from '@/components/ui/card';
 import { tradingApi, ApiError, TradingAnalysis } from '@/services/api';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 const SearchBar = () => {
   const [pairInput, setPairInput] = useState('');
@@ -24,12 +18,8 @@ const SearchBar = () => {
   const [analysis, setAnalysis] = useState<TradingAnalysis | null>(null);
   const [selectedProvider, setSelectedProvider] = useState('TwelveData');
 
-  // Available data providers
-  const providers = [
-    { value: 'TwelveData', label: 'TwelveData' },
-    { value: 'TraderMade', label: 'TraderMade' },
-    { value: 'Polygon', label: 'Polygon' },
-  ];
+  // Available providers
+  const providers = ['TwelveData', 'Polygon', 'Mock', 'TraderMade'];
 
   // Mock data for top movers
   const topMovers = [
@@ -53,6 +43,7 @@ const SearchBar = () => {
     setError(null);
     
     try {
+      // Use the provider-specific endpoint
       const data = await tradingApi.analyzePair(pairInput.trim(), selectedProvider);
       setAnalysisPair(pairInput);
       setAnalysis(data);
@@ -143,48 +134,43 @@ const SearchBar = () => {
             </Button>
           ) : (
             <div className="w-full max-w-md">
-              <div className="flex gap-2">
-                <Input
-                  value={pairInput}
-                  onChange={(e) => setPairInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Enter a pair (e.g., EUR/USD, BTC/USD)"
-                  className="bg-zinc-800 border-zinc-700 text-white placeholder:text-zinc-400"
-                  disabled={isLoading}
-                />
-                <Select
-                  value={selectedProvider}
-                  onValueChange={setSelectedProvider}
-                >
-                  <SelectTrigger className="w-[140px] bg-zinc-800 border-zinc-700 text-white">
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <Input
+                    value={pairInput}
+                    onChange={(e) => setPairInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Enter a pair (e.g., EUR/USD, BTC/USD)"
+                    className="bg-zinc-800 border-zinc-700 text-white placeholder:text-zinc-400"
+                    disabled={isLoading}
+                  />
+                  <Button
+                    onClick={handleAnalyzeSubmit}
+                    className="bg-teal-600 hover:bg-teal-700 text-white"
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <>
+                        <Loader2 size={18} className="animate-spin mr-2" />
+                        Analyzing...
+                      </>
+                    ) : (
+                      'Analyze'
+                    )}
+                  </Button>
+                </div>
+                <Select value={selectedProvider} onValueChange={setSelectedProvider}>
+                  <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
                     <SelectValue placeholder="Select provider" />
                   </SelectTrigger>
                   <SelectContent className="bg-zinc-800 border-zinc-700">
                     {providers.map((provider) => (
-                      <SelectItem
-                        key={provider.value}
-                        value={provider.value}
-                        className="text-white hover:bg-zinc-700 focus:bg-zinc-700"
-                      >
-                        {provider.label}
+                      <SelectItem key={provider} value={provider} className="text-white hover:bg-zinc-700">
+                        {provider}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                <Button
-                  onClick={handleAnalyzeSubmit}
-                  className="bg-teal-600 hover:bg-teal-700 text-white"
-                  disabled={isLoading}
-                >
-                  {isLoading ? (
-                    <>
-                      <Loader2 size={18} className="animate-spin mr-2" />
-                      Analyzing...
-                    </>
-                  ) : (
-                    'Analyze'
-                  )}
-                </Button>
               </div>
               <p className="text-xs text-zinc-400 mt-2 text-center">
                 Examples: EUR/USD, GBP/JPY, BTC/USD, ETH/USD

@@ -1,15 +1,24 @@
-import { config } from '../config';
+import { config } from '@/config';
 
 export interface TradingAnalysis {
+  currencyPair: string;
   sentiment: string;
-  recommendation: string;
-  entryPrice: number;
-  stopLoss: number;
-  takeProfit: number;
-  riskRewardRatio: number;
+  confidence: number;
   factors: string[];
-  rationale: string;
-  marketSession?: {
+  summary: string;
+  sources: string[];
+  timestamp: string;
+  modelUsed: string;
+  currentPrice: number;
+  tradeRecommendation: string;
+  stopLossPrice: number;
+  takeProfitPrice: number;
+  bestEntryPrice: number;
+  orderType: string;
+  riskLevel: string;
+  riskRewardRatio: number;
+  isTradeRecommended: boolean;
+  marketSession: {
     currentSession: string;
     description: string;
     liquidityLevel: number;
@@ -17,11 +26,33 @@ export interface TradingAnalysis {
     recommendationReason: string;
     timeUntilNextSession: string;
     nextSession: string;
+    currentTimeUtc: string;
+    nextSessionStartTimeUtc: string;
+  };
+  sessionWarning: string | null;
+  timeToBestEntry: string;
+  validUntil: string;
+  isSafeToEnterAtCurrentPrice: boolean;
+  currentEntryReason: string;
+  positionSizing: {
+    lotSize: number;
+    riskAmount: number;
+    potentialProfit: number;
+  } | null;
+  modelReasoning: string;
+  inOutPlay: {
+    available: boolean;
+    direction: string;
+    entryPrice: number;
+    stopLoss: number;
+    takeProfit: number;
+    timeframe: string;
+    reason: string;
   };
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(message: string) {
     super(message);
     this.name = 'ApiError';
   }
@@ -57,63 +88,53 @@ const devFetch = async (url: string, options: RequestInit = {}) => {
 };
 
 export const tradingApi = {
-  async analyzePair(pair: string, provider: string = 'TwelveData'): Promise<TradingAnalysis> {
-    // Remove both slashes and underscores, and convert to uppercase
-    const formattedPair = pair.replace(/[/_]/g, '').toUpperCase();
-    const apiUrl = `${config.apiBaseUrl}/api/trading/analyze/${formattedPair}/${provider}`;
-    
-    console.log('Analyzing pair:', formattedPair, 'with provider:', provider);
-    console.log('API URL:', apiUrl);
-    
+  analyzePair: async (pair: string, provider: string = 'TwelveData'): Promise<TradingAnalysis> => {
     try {
-      const response = await fetch(apiUrl, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
+      // Format the pair by removing slashes and underscores and converting to uppercase
+      const formattedPair = pair.replace(/[/_]/g, '').toUpperCase();
+      
+      // Log the request details
+      console.log('Analyzing pair:', {
+        pair: formattedPair,
+        provider,
+        url: `${config.apiBaseUrl}/api/trading/analyze/${formattedPair}/${provider}`
       });
-      
-      console.log('Response status:', response.status);
-      
-      if (!response.ok) {
-        let errorMessage = response.statusText;
-        try {
-          const errorText = await response.text();
-          console.error('Error response:', errorText);
-          errorMessage = errorText || errorMessage;
-        } catch (e) {
-          console.error('Failed to read error response:', e);
+
+      const response = await fetch(
+        `${config.apiBaseUrl}/api/trading/analyze/${formattedPair}/${provider}`,
+        {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
+          }
         }
-        
-        throw new ApiError(
-          response.status,
-          `Analysis failed: ${errorMessage}`
-        );
+      );
+
+      // Log the response status
+      console.log('Response status:', response.status);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API Error:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorText
+        });
+        throw new ApiError(`Failed to analyze pair: ${errorText}`);
       }
-      
+
       const data = await response.json();
+      
+      // Log the successful response data
       console.log('Analysis response:', data);
+      
       return data;
     } catch (error) {
-      console.error('Analysis error details:', error);
-      
-      // Check if it's a network error
-      if (error instanceof TypeError && error.message === 'Failed to fetch') {
-        throw new ApiError(
-          0,
-          'Unable to connect to the API. Please ensure the backend server is running.'
-        );
-      }
-      
+      console.error('Error in analyzePair:', error);
       if (error instanceof ApiError) {
         throw error;
       }
-      
-      throw new ApiError(
-        0,
-        `Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
+      throw new ApiError('Failed to connect to the analysis service');
     }
-  },
+  }
 }; 
