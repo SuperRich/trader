@@ -7,6 +7,8 @@ using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
 using System.ComponentModel.DataAnnotations;
+using Trader.Api.Middleware;
+using Trader.Core.Exceptions;
 
 namespace Trader.Api;
 
@@ -185,6 +187,9 @@ public class Program
         app.UseHttpsRedirection();
         app.UseCors("AllowAll");
 
+        // Add global exception handling
+        app.UseMiddleware<ExceptionHandlingMiddleware>();
+
         // Define API endpoints
         // Endpoint to get prediction for a specific currency pair and timeframe
         app.MapGet("/api/forex/prediction/{currencyPair}/{timeframe}", 
@@ -192,7 +197,7 @@ public class Program
         {
             if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
             {
-                return Results.BadRequest($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
             }
             
             var prediction = predictionService.GeneratePrediction(currencyPair, timeframeEnum);
@@ -207,7 +212,7 @@ public class Program
         {
             if (string.IsNullOrWhiteSpace(currencyPair))
             {
-                return Results.BadRequest("Currency pair is required");
+                throw new Trader.Core.Exceptions.ValidationException("Currency pair is required");
             }
             
             var predictions = predictionService.AnalyzeMultipleTimeframes(currencyPair);
@@ -220,26 +225,18 @@ public class Program
         app.MapGet("/api/forex/candles/{symbol}/{timeframe}/{count}", 
             async (string symbol, string timeframe, int count, IForexDataProvider dataProvider, ILogger<Program> logger) =>
         {
-            try
+            if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
             {
-                if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
-                {
-                    return Results.BadRequest($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
-                }
-                
-                if (count <= 0 || count > 1000)
-                {
-                    return Results.BadRequest("Count must be between 1 and 1000");
-                }
-                
-                var candles = await dataProvider.GetCandleDataAsync(symbol, timeframeEnum, count);
-                return Results.Ok(candles);
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
             }
-            catch (Exception ex)
+            
+            if (count <= 0 || count > 1000)
             {
-                logger.LogError(ex, "Error fetching candle data for {Symbol} on {Timeframe} timeframe", symbol, timeframe);
-                return Results.Problem($"Error fetching data: {ex.Message}", statusCode: 500);
+                throw new Trader.Core.Exceptions.ValidationException("Count must be between 1 and 1000");
             }
+            
+            var candles = await dataProvider.GetCandleDataAsync(symbol, timeframeEnum, count);
+            return Results.Ok(candles);
         })
         .WithName("GetCandles")
         .WithOpenApi();
@@ -248,33 +245,24 @@ public class Program
         app.MapGet("/api/forex/candles/{symbol}/{timeframe}/{count}/{provider}", 
             async (string symbol, string timeframe, int count, string provider, IForexDataProviderFactory providerFactory, ILogger<Program> logger) =>
         {
-            try
+            if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
             {
-                if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
-                {
-                    return Results.BadRequest($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
-                }
-                
-                if (count <= 0 || count > 1000)
-                {
-                    return Results.BadRequest("Count must be between 1 and 1000");
-                }
-                
-                if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
-                {
-                    return Results.BadRequest($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
-                }
-                
-                var dataProvider = providerFactory.GetProvider(providerType);
-                var candles = await dataProvider.GetCandleDataAsync(symbol, timeframeEnum, count);
-                return Results.Ok(candles);
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
             }
-            catch (Exception ex)
+            
+            if (count <= 0 || count > 1000)
             {
-                logger.LogError(ex, "Error fetching candle data for {Symbol} on {Timeframe} timeframe with provider {Provider}", 
-                    symbol, timeframe, provider);
-                return Results.Problem($"Error fetching data: {ex.Message}", statusCode: 500);
+                throw new Trader.Core.Exceptions.ValidationException("Count must be between 1 and 1000");
             }
+            
+            if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
+            {
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
+            }
+            
+            var dataProvider = providerFactory.GetProvider(providerType);
+            var candles = await dataProvider.GetCandleDataAsync(symbol, timeframeEnum, count);
+            return Results.Ok(candles);
         })
         .WithName("GetCandlesWithProvider")
         .WithOpenApi();
@@ -284,76 +272,88 @@ public class Program
             async (string symbol, ISentimentAnalyzer analyzer, ILogger<Program> logger, 
                    decimal? accountBalance, decimal? leverage, string? targetProfits) =>
         {
-            try
+            if (string.IsNullOrWhiteSpace(symbol))
             {
-                if (string.IsNullOrWhiteSpace(symbol))
+                throw new Trader.Core.Exceptions.ValidationException("Symbol is required");
+            }
+            
+            logger.LogInformation("Analyzing {Symbol} with TradingView", symbol);
+            var analysis = await analyzer.AnalyzeSentimentAsync(symbol);
+            
+            if (analysis is null)
+            {
+                throw new ExternalApiException("Failed to get analysis response", "SENTIMENT_ANALYZER");
+            }
+            
+            // Add position sizing calculations with custom parameters if provided
+            if (analysis.CurrentPrice > 0)
+            {
+                try
                 {
-                    return Results.BadRequest("Symbol is required");
-                }
-                
-                logger.LogInformation("Analyzing {Symbol} with TradingView", symbol);
-                var analysis = await analyzer.AnalyzeSentimentAsync(symbol);
-                
-                // Add position sizing calculations with custom parameters if provided
-                if (analysis != null && analysis.CurrentPrice > 0)
-                {
-                    try
+                    var positionSizingService = app.Services.GetRequiredService<IPositionSizingService>();
+                    
+                    // Parse target profits if provided
+                    decimal[] profitTargets = Array.Empty<decimal>();
+                    if (!string.IsNullOrEmpty(targetProfits))
                     {
-                        var positionSizingService = app.Services.GetRequiredService<IPositionSizingService>();
-                        
-                        // Parse target profits if provided
-                        decimal[]? profitTargets = null;
-                        if (!string.IsNullOrEmpty(targetProfits))
+                        try
                         {
-                            profitTargets = targetProfits.Split(',')
-                                .Select(p => decimal.TryParse(p, out decimal value) ? value : 0)
+                            var parsedTargets = targetProfits
+                                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                .Select(p => decimal.TryParse(p.Trim(), out decimal value) ? value : 0)
                                 .Where(p => p > 0)
                                 .ToArray();
+                            
+                            // Only assign if we have valid targets
+                            if (parsedTargets.Length > 0)
+                            {
+                                profitTargets = parsedTargets;
+                            }
                         }
-                        
-                        analysis.PositionSizing = await positionSizingService.CalculatePositionSizingAsync(
-                            symbol,
-                            analysis.CurrentPrice,
-                            accountBalance ?? 201m,
-                            leverage ?? 1000m,
-                            profitTargets,
-                            analysis.TradeRecommendation,
-                            analysis.StopLossPrice > 0 ? analysis.StopLossPrice : null,
-                            analysis.TakeProfitPrice > 0 ? analysis.TakeProfitPrice : null);
-                        
-                        logger.LogInformation("Added position sizing calculations for {Symbol} with balance {Balance} and leverage {Leverage}", 
-                            symbol, accountBalance ?? 201m, leverage ?? 1000m);
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Error parsing profit targets: {TargetProfits}", targetProfits);
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        logger.LogError(ex, "Error calculating position sizing for {Symbol}", symbol);
-                    }
-                }
-                
-                // Log trade recommendation if available
-                if (analysis != null && analysis.IsTradeRecommended)
-                {
-                    logger.LogInformation(
-                        "Trade recommendation for {Symbol}: {Direction} at {Price}, SL: {StopLoss}, TP: {TakeProfit}, R:R {RiskReward}",
-                        symbol, 
-                        analysis.TradeRecommendation, 
+                    
+                    analysis.PositionSizing = await positionSizingService.CalculatePositionSizingAsync(
+                        symbol,
                         analysis.CurrentPrice,
-                        analysis.StopLossPrice,
-                        analysis.TakeProfitPrice,
-                        analysis.RiskRewardRatio);
+                        accountBalance ?? 201m,
+                        leverage ?? 1000m,
+                        profitTargets.Length > 0 ? profitTargets : null,
+                        analysis.TradeRecommendation,
+                        analysis.StopLossPrice > 0 ? analysis.StopLossPrice : null,
+                        analysis.TakeProfitPrice > 0 ? analysis.TakeProfitPrice : null);
+                    
+                    logger.LogInformation("Added position sizing calculations for {Symbol} with balance {Balance} and leverage {Leverage}", 
+                        symbol, accountBalance ?? 201m, leverage ?? 1000m);
                 }
-                else
+                catch (Exception ex)
                 {
-                    logger.LogInformation("No trade recommended for {Symbol} at this time", symbol);
+                    logger.LogError(ex, "Error calculating position sizing for {Symbol}", symbol);
+                    throw new ExternalApiException($"Error calculating position sizing: {ex.Message}", "POSITION_SIZING");
                 }
-                
-                return Results.Ok(analysis);
             }
-            catch (Exception ex)
+            
+            // Log trade recommendation if available
+            if (analysis.IsTradeRecommended)
             {
-                logger.LogError(ex, "Error analyzing {Symbol}", symbol);
-                return Results.Problem($"Error analyzing chart: {ex.Message}", statusCode: 500);
+                logger.LogInformation(
+                    "Trade recommendation for {Symbol}: {Direction} at {Price}, SL: {StopLoss}, TP: {TakeProfit}, R:R {RiskReward}",
+                    symbol, 
+                    analysis.TradeRecommendation, 
+                    analysis.CurrentPrice,
+                    analysis.StopLossPrice,
+                    analysis.TakeProfitPrice,
+                    analysis.RiskRewardRatio);
             }
+            else
+            {
+                logger.LogInformation("No trade recommended for {Symbol} at this time", symbol);
+            }
+            
+            return Results.Ok(analysis);
         })
         .WithName("AnalyzeChart")
         .WithOpenApi();
@@ -364,160 +364,170 @@ public class Program
                    IConfiguration configuration, ILoggerFactory loggerFactory, ILogger<Program> logger,
                    decimal? accountBalance, decimal? leverage, string? targetProfits) =>
         {
-            try
+            if (string.IsNullOrWhiteSpace(symbol))
             {
-                if (string.IsNullOrWhiteSpace(symbol))
+                throw new Trader.Core.Exceptions.ValidationException("Symbol is required");
+            }
+            
+            if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
+            {
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
+            }
+            
+            logger.LogInformation("Analyzing {Symbol} with TradingView using {Provider} data provider", symbol, provider);
+            
+            // Create a new HttpClient for the analyzer
+            using var httpClient = new HttpClient
+            {
+                Timeout = TimeSpan.FromMinutes(5) // Increase timeout to 5 minutes for DeepSeek model
+            };
+            httpClient.DefaultRequestHeaders.Accept.Clear();
+            httpClient.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+            
+            // Check for OpenRouter API key first
+            var openRouterApiKey = configuration["OpenRouter:ApiKey"] ?? configuration["TRADER_OPENROUTER_API_KEY"];
+            var perplexityApiKey = configuration["Perplexity:ApiKey"] ?? configuration["TRADER_PERPLEXITY_API_KEY"];
+            
+            if (string.IsNullOrEmpty(openRouterApiKey) && string.IsNullOrEmpty(perplexityApiKey))
+            {
+                throw new ConfigurationException("Either OpenRouter or Perplexity API key is required for analysis");
+            }
+            
+            logger.LogInformation("Provider-specific endpoint - Available API keys: OpenRouter: {HasOpenRouter}, Perplexity: {HasPerplexity}",
+                !string.IsNullOrEmpty(openRouterApiKey),
+                !string.IsNullOrEmpty(perplexityApiKey));
+            
+            string analyzerType = "Perplexity"; // Default
+            string model = "sonar-pro"; // Default model
+            
+            if (!string.IsNullOrEmpty(openRouterApiKey))
+            {
+                // Use OpenRouter
+                httpClient.BaseAddress = new Uri("https://openrouter.ai/api/v1/");
+                httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", openRouterApiKey);
+                httpClient.DefaultRequestHeaders.Add("HTTP-Referer", "https://trader.app"); // Required by OpenRouter
+                analyzerType = "OpenRouter";
+                
+                // Get the model from configuration or use a default
+                model = configuration["OpenRouter:Model"] ?? "openrouter/auto";
+                logger.LogInformation("Provider-specific endpoint using OpenRouter with model: {Model}", model);
+            }
+            else
+            {
+                // Use Perplexity
+                httpClient.BaseAddress = new Uri("https://api.perplexity.ai/");
+                httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", perplexityApiKey);
+                logger.LogInformation("Provider-specific endpoint using Perplexity with model: {Model}", model);
+            }
+            
+            logger.LogInformation("Provider-specific endpoint using {AnalyzerType} for sentiment analysis", analyzerType);
+            
+            // Create a configuration with the model explicitly set
+            var configDictionary = new Dictionary<string, string>();
+            if (analyzerType == "OpenRouter")
+            {
+                configDictionary["OpenRouter:ApiKey"] = openRouterApiKey!;
+                configDictionary["OpenRouter:Model"] = model;
+            }
+            else
+            {
+                configDictionary["Perplexity:ApiKey"] = perplexityApiKey!;
+            }
+            
+            // Create a configuration that includes our model setting
+            var configBuilder = new ConfigurationBuilder()
+                .AddConfiguration(configuration)
+                .AddInMemory(configDictionary);
+            var combinedConfig = configBuilder.Build();
+            
+            // Create a new analyzer with the specified provider and our combined configuration
+            var analyzer = new TradingViewAnalyzer(
+                providerFactory,
+                httpClient,
+                combinedConfig,
+                loggerFactory.CreateLogger<TradingViewAnalyzer>(),
+                app.Services.GetRequiredService<ForexMarketSessionService>(),
+                app.Services.GetRequiredService<IPositionSizingService>(),
+                app.Services,
+                providerType);
+            
+            var analysis = await analyzer.AnalyzeSentimentAsync(symbol);
+            
+            if (analysis is null)
+            {
+                throw new ExternalApiException("Failed to get analysis response", "SENTIMENT_ANALYZER");
+            }
+            
+            // Add position sizing calculations with custom parameters if provided
+            if (analysis.CurrentPrice > 0 && (accountBalance.HasValue || leverage.HasValue || !string.IsNullOrEmpty(targetProfits)))
+            {
+                try
                 {
-                    return Results.BadRequest("Symbol is required");
-                }
-                
-                if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
-                {
-                    return Results.BadRequest($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
-                }
-                
-                logger.LogInformation("Analyzing {Symbol} with TradingView using {Provider} data provider", symbol, provider);
-                
-                // Create a new HttpClient for the analyzer
-                var httpClient = new HttpClient();
-                httpClient.Timeout = TimeSpan.FromMinutes(5); // Increase timeout to 5 minutes for DeepSeek model
-                httpClient.DefaultRequestHeaders.Accept.Clear();
-                httpClient.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
-                
-                // Check for OpenRouter API key first
-                var openRouterApiKey = configuration["OpenRouter:ApiKey"] ?? configuration["TRADER_OPENROUTER_API_KEY"];
-                var perplexityApiKey = configuration["Perplexity:ApiKey"] ?? configuration["TRADER_PERPLEXITY_API_KEY"];
-                
-                logger.LogInformation("Provider-specific endpoint - Available API keys: OpenRouter: {HasOpenRouter}, Perplexity: {HasPerplexity}",
-                    !string.IsNullOrEmpty(openRouterApiKey),
-                    !string.IsNullOrEmpty(perplexityApiKey));
-                
-                string analyzerType = "Perplexity"; // Default
-                string model = ""; // Will store the model name
-                
-                if (!string.IsNullOrEmpty(openRouterApiKey))
-                {
-                    // Use OpenRouter
-                    httpClient.BaseAddress = new Uri("https://openrouter.ai/api/v1/");
-                    httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", openRouterApiKey);
-                    httpClient.DefaultRequestHeaders.Add("HTTP-Referer", "https://trader.app"); // Required by OpenRouter
-                    analyzerType = "OpenRouter";
+                    var positionSizingService = app.Services.GetRequiredService<IPositionSizingService>();
                     
-                    // Get the model from configuration or use a default
-                    model = configuration["OpenRouter:Model"] ?? "openrouter/auto";
-                    logger.LogInformation("Provider-specific endpoint using OpenRouter with model: {Model}", model);
-                }
-                else if (!string.IsNullOrEmpty(perplexityApiKey))
-                {
-                    // Use Perplexity
-                    httpClient.BaseAddress = new Uri("https://api.perplexity.ai/");
-                    httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", perplexityApiKey);
-                    model = "sonar-pro"; // Default Perplexity model
-                    logger.LogInformation("Provider-specific endpoint using Perplexity with model: {Model}", model);
-                }
-                else
-                {
-                    return Results.BadRequest("Either OpenRouter or Perplexity API key is required for analysis");
-                }
-                
-                logger.LogInformation("Provider-specific endpoint using {AnalyzerType} for sentiment analysis", analyzerType);
-                
-                // Create a configuration with the model explicitly set to ensure it's used
-                var configDictionary = new Dictionary<string, string>();
-                if (analyzerType == "OpenRouter")
-                {
-                    configDictionary["OpenRouter:ApiKey"] = openRouterApiKey;
-                    configDictionary["OpenRouter:Model"] = model;
-                    // Don't clear Perplexity key, just ensure OpenRouter is prioritized
-                }
-                else if (analyzerType == "Perplexity")
-                {
-                    if (!string.IsNullOrEmpty(perplexityApiKey))
+                    // Parse target profits if provided
+                    decimal[] profitTargets = Array.Empty<decimal>();
+                    if (!string.IsNullOrEmpty(targetProfits))
                     {
-                        configDictionary["Perplexity:ApiKey"] = perplexityApiKey;
-                    }
-                }
-                
-                // Create a configuration that includes our model setting
-                var configBuilder = new ConfigurationBuilder()
-                    .AddConfiguration(configuration)
-                    .AddInMemory(configDictionary);
-                var combinedConfig = configBuilder.Build();
-                
-                // Create a new analyzer with the specified provider and our combined configuration
-                var analyzer = new TradingViewAnalyzer(
-                    providerFactory,
-                    httpClient,
-                    combinedConfig,
-                    loggerFactory.CreateLogger<TradingViewAnalyzer>(),
-                    app.Services.GetRequiredService<ForexMarketSessionService>(),
-                    app.Services.GetRequiredService<IPositionSizingService>(),
-                    app.Services,
-                    providerType);
-                
-                var analysis = await analyzer.AnalyzeSentimentAsync(symbol);
-                
-                // Add position sizing calculations with custom parameters if provided
-                if (analysis != null && analysis.CurrentPrice > 0 && (accountBalance.HasValue || leverage.HasValue || !string.IsNullOrEmpty(targetProfits)))
-                {
-                    try
-                    {
-                        var positionSizingService = app.Services.GetRequiredService<IPositionSizingService>();
-                        
-                        // Parse target profits if provided
-                        decimal[]? profitTargets = null;
-                        if (!string.IsNullOrEmpty(targetProfits))
+                        try
                         {
-                            profitTargets = targetProfits.Split(',')
-                                .Select(p => decimal.TryParse(p, out decimal value) ? value : 0)
+                            var parsedTargets = targetProfits
+                                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                .Select(p => decimal.TryParse(p.Trim(), out decimal value) ? value : 0)
                                 .Where(p => p > 0)
                                 .ToArray();
+                            
+                            // Only assign if we have valid targets
+                            if (parsedTargets.Length > 0)
+                            {
+                                profitTargets = parsedTargets;
+                            }
                         }
-                        
-                        analysis.PositionSizing = await positionSizingService.CalculatePositionSizingAsync(
-                            symbol,
-                            analysis.CurrentPrice,
-                            accountBalance ?? 201m,
-                            leverage ?? 1000m,
-                            profitTargets,
-                            analysis.TradeRecommendation,
-                            analysis.StopLossPrice > 0 ? analysis.StopLossPrice : null,
-                            analysis.TakeProfitPrice > 0 ? analysis.TakeProfitPrice : null);
-                        
-                        logger.LogInformation("Added position sizing calculations for {Symbol} with balance {Balance} and leverage {Leverage}", 
-                            symbol, accountBalance ?? 201m, leverage ?? 1000m);
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Error parsing profit targets: {TargetProfits}", targetProfits);
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        logger.LogError(ex, "Error calculating position sizing for {Symbol}", symbol);
-                    }
-                }
-                
-                // Log trade recommendation if available
-                if (analysis != null && analysis.IsTradeRecommended)
-                {
-                    logger.LogInformation(
-                        "Trade recommendation for {Symbol} using {Provider}: {Direction} at {Price}, SL: {StopLoss}, TP: {TakeProfit}, R:R {RiskReward}",
+                    
+                    analysis.PositionSizing = await positionSizingService.CalculatePositionSizingAsync(
                         symbol,
-                        provider,
-                        analysis.TradeRecommendation, 
                         analysis.CurrentPrice,
-                        analysis.StopLossPrice,
-                        analysis.TakeProfitPrice,
-                        analysis.RiskRewardRatio);
+                        accountBalance ?? 201m,
+                        leverage ?? 1000m,
+                        profitTargets.Length > 0 ? profitTargets : null,
+                        analysis.TradeRecommendation,
+                        analysis.StopLossPrice > 0 ? analysis.StopLossPrice : null,
+                        analysis.TakeProfitPrice > 0 ? analysis.TakeProfitPrice : null);
+                    
+                    logger.LogInformation("Added position sizing calculations for {Symbol} with balance {Balance} and leverage {Leverage}", 
+                        symbol, accountBalance ?? 201m, leverage ?? 1000m);
                 }
-                else
+                catch (Exception ex)
                 {
-                    logger.LogInformation("No trade recommended for {Symbol} using {Provider} at this time", symbol, provider);
+                    logger.LogError(ex, "Error calculating position sizing for {Symbol}", symbol);
+                    throw new ExternalApiException($"Error calculating position sizing: {ex.Message}", "POSITION_SIZING");
                 }
-                
-                return Results.Ok(analysis);
             }
-            catch (Exception ex)
+            
+            // Log trade recommendation if available
+            if (analysis.IsTradeRecommended)
             {
-                logger.LogError(ex, "Error analyzing {Symbol} with {Provider}", symbol, provider);
-                return Results.Problem($"Error analyzing chart: {ex.Message}", statusCode: 500);
+                logger.LogInformation(
+                    "Trade recommendation for {Symbol} using {Provider}: {Direction} at {Price}, SL: {StopLoss}, TP: {TakeProfit}, R:R {RiskReward}",
+                    symbol,
+                    provider,
+                    analysis.TradeRecommendation, 
+                    analysis.CurrentPrice,
+                    analysis.StopLossPrice,
+                    analysis.TakeProfitPrice,
+                    analysis.RiskRewardRatio);
             }
+            else
+            {
+                logger.LogInformation("No trade recommended for {Symbol} using {Provider} at this time", symbol, provider);
+            }
+            
+            return Results.Ok(analysis);
         })
         .WithName("AnalyzeSymbol")
         .WithOpenApi();
@@ -567,13 +577,27 @@ public class Program
                         var positionSizingService = app.Services.GetRequiredService<IPositionSizingService>();
                         
                         // Parse target profits if provided
-                        decimal[]? profitTargets = null;
+                        decimal[] profitTargets = Array.Empty<decimal>();
                         if (!string.IsNullOrEmpty(targetProfits))
                         {
-                            profitTargets = targetProfits.Split(',')
-                                .Select(p => decimal.TryParse(p, out decimal value) ? value : 0)
-                                .Where(p => p > 0)
-                                .ToArray();
+                            try
+                            {
+                                var parsedTargets = targetProfits
+                                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                    .Select(p => decimal.TryParse(p.Trim(), out decimal value) ? value : 0)
+                                    .Where(p => p > 0)
+                                    .ToArray();
+                                
+                                // Only assign if we have valid targets
+                                if (parsedTargets.Length > 0)
+                                {
+                                    profitTargets = parsedTargets;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogWarning(ex, "Error parsing profit targets: {TargetProfits}", targetProfits);
+                            }
                         }
                         
                         foreach (var recommendation in recommendations)
@@ -585,7 +609,7 @@ public class Program
                                     recommendation.CurrentPrice,
                                     accountBalance ?? 201m,
                                     leverage ?? 1000m,
-                                    profitTargets,
+                                    profitTargets.Length > 0 ? profitTargets : null,
                                     recommendation.Direction,
                                     recommendation.StopLossPrice > 0 ? recommendation.StopLossPrice : null,
                                     recommendation.TakeProfitPrice > 0 ? recommendation.TakeProfitPrice : null);
@@ -1457,31 +1481,23 @@ public class Program
             string timeframe = "Hours1",
             string provider = "TwelveData") =>
         {
-            try
+            if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
             {
-                if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
-                {
-                    return Results.BadRequest($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
-                }
-                
-                if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
-                {
-                    return Results.BadRequest($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
-                }
-                
-                if (count <= 0 || count > 25)
-                {
-                    return Results.BadRequest("Count must be between 1 and 25");
-                }
-                
-                var marketMovers = await marketMoversService.GetTopForexMoversAsync(count, timeframeEnum, providerType);
-                return Results.Ok(marketMovers);
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
             }
-            catch (Exception ex)
+            
+            if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
             {
-                logger.LogError(ex, "Error getting top forex movers");
-                return Results.Problem($"Error getting top forex movers: {ex.Message}", statusCode: 500);
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
             }
+            
+            if (count <= 0 || count > 25)
+            {
+                throw new Trader.Core.Exceptions.ValidationException("Count must be between 1 and 25");
+            }
+            
+            var marketMovers = await marketMoversService.GetTopForexMoversAsync(count, timeframeEnum, providerType);
+            return Results.Ok(marketMovers);
         })
         .WithName("GetTopForexMovers")
         .WithOpenApi(operation => {
@@ -1497,31 +1513,23 @@ public class Program
             string timeframe = "Hours1",
             string provider = "TwelveData") =>
         {
-            try
+            if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
             {
-                if (!Enum.TryParse<ChartTimeframe>(timeframe, true, out var timeframeEnum))
-                {
-                    return Results.BadRequest($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
-                }
-                
-                if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
-                {
-                    return Results.BadRequest($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
-                }
-                
-                if (count <= 0 || count > 25)
-                {
-                    return Results.BadRequest("Count must be between 1 and 25");
-                }
-                
-                var marketMovers = await marketMoversService.GetTopCryptoMoversAsync(count, timeframeEnum, providerType);
-                return Results.Ok(marketMovers);
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
             }
-            catch (Exception ex)
+            
+            if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
             {
-                logger.LogError(ex, "Error getting top crypto movers");
-                return Results.Problem($"Error getting top crypto movers: {ex.Message}", statusCode: 500);
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
             }
+            
+            if (count <= 0 || count > 25)
+            {
+                throw new Trader.Core.Exceptions.ValidationException("Count must be between 1 and 25");
+            }
+            
+            var marketMovers = await marketMoversService.GetTopCryptoMoversAsync(count, timeframeEnum, providerType);
+            return Results.Ok(marketMovers);
         })
         .WithName("GetTopCryptoMovers")
         .WithOpenApi(operation => {
@@ -1538,45 +1546,37 @@ public class Program
             string longTermTimeframe = "Day1",
             string provider = "TraderMade") =>
         {
-            try
+            if (!Enum.TryParse<ChartTimeframe>(shortTermTimeframe, true, out var shortTermTimeframeEnum))
             {
-                if (!Enum.TryParse<ChartTimeframe>(shortTermTimeframe, true, out var shortTermTimeframeEnum))
-                {
-                    return Results.BadRequest($"Invalid short-term timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
-                }
-                
-                if (!Enum.TryParse<ChartTimeframe>(longTermTimeframe, true, out var longTermTimeframeEnum))
-                {
-                    return Results.BadRequest($"Invalid long-term timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
-                }
-                
-                if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
-                {
-                    return Results.BadRequest($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
-                }
-                
-                if (count <= 0 || count > 25)
-                {
-                    return Results.BadRequest("Count must be between 1 and 25");
-                }
-                
-                // Get top forex movers
-                var marketMovers = await marketMoversService.GetTopForexMoversAsync(count, shortTermTimeframeEnum, providerType);
-                
-                // Apply EMA filters
-                var filteredMarketMovers = await marketMoversService.ApplyEmaFiltersAsync(
-                    marketMovers, shortTermTimeframeEnum, longTermTimeframeEnum, providerType);
-                
-                // Generate trade recommendations
-                var marketMoversWithRecommendations = await marketMoversService.GenerateTradeRecommendationsAsync(filteredMarketMovers);
-                
-                return Results.Ok(marketMoversWithRecommendations);
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid short-term timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
             }
-            catch (Exception ex)
+            
+            if (!Enum.TryParse<ChartTimeframe>(longTermTimeframe, true, out var longTermTimeframeEnum))
             {
-                logger.LogError(ex, "Error getting top forex movers with EMA filters");
-                return Results.Problem($"Error getting top forex movers with EMA filters: {ex.Message}", statusCode: 500);
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid long-term timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
             }
+            
+            if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
+            {
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
+            }
+            
+            if (count <= 0 || count > 25)
+            {
+                throw new Trader.Core.Exceptions.ValidationException("Count must be between 1 and 25");
+            }
+            
+            // Get top forex movers
+            var marketMovers = await marketMoversService.GetTopForexMoversAsync(count, shortTermTimeframeEnum, providerType);
+            
+            // Apply EMA filters
+            var filteredMarketMovers = await marketMoversService.ApplyEmaFiltersAsync(
+                marketMovers, shortTermTimeframeEnum, longTermTimeframeEnum, providerType);
+            
+            // Generate trade recommendations
+            var marketMoversWithRecommendations = await marketMoversService.GenerateTradeRecommendationsAsync(filteredMarketMovers);
+            
+            return Results.Ok(marketMoversWithRecommendations);
         })
         .WithName("GetTopForexMoversWithEmaFilters")
         .WithOpenApi(operation => {
@@ -1593,45 +1593,37 @@ public class Program
             string longTermTimeframe = "Day1",
             string provider = "TraderMade") =>
         {
-            try
+            if (!Enum.TryParse<ChartTimeframe>(shortTermTimeframe, true, out var shortTermTimeframeEnum))
             {
-                if (!Enum.TryParse<ChartTimeframe>(shortTermTimeframe, true, out var shortTermTimeframeEnum))
-                {
-                    return Results.BadRequest($"Invalid short-term timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
-                }
-                
-                if (!Enum.TryParse<ChartTimeframe>(longTermTimeframe, true, out var longTermTimeframeEnum))
-                {
-                    return Results.BadRequest($"Invalid long-term timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
-                }
-                
-                if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
-                {
-                    return Results.BadRequest($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
-                }
-                
-                if (count <= 0 || count > 25)
-                {
-                    return Results.BadRequest("Count must be between 1 and 25");
-                }
-                
-                // Get top crypto movers
-                var marketMovers = await marketMoversService.GetTopCryptoMoversAsync(count, shortTermTimeframeEnum, providerType);
-                
-                // Apply EMA filters
-                var filteredMarketMovers = await marketMoversService.ApplyEmaFiltersAsync(
-                    marketMovers, shortTermTimeframeEnum, longTermTimeframeEnum, providerType);
-                
-                // Generate trade recommendations
-                var marketMoversWithRecommendations = await marketMoversService.GenerateTradeRecommendationsAsync(filteredMarketMovers);
-                
-                return Results.Ok(marketMoversWithRecommendations);
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid short-term timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
             }
-            catch (Exception ex)
+            
+            if (!Enum.TryParse<ChartTimeframe>(longTermTimeframe, true, out var longTermTimeframeEnum))
             {
-                logger.LogError(ex, "Error getting top crypto movers with EMA filters");
-                return Results.Problem($"Error getting top crypto movers with EMA filters: {ex.Message}", statusCode: 500);
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid long-term timeframe. Valid values: {string.Join(", ", Enum.GetNames<ChartTimeframe>())}");
             }
+            
+            if (!Enum.TryParse<DataProviderType>(provider, true, out var providerType))
+            {
+                throw new Trader.Core.Exceptions.ValidationException($"Invalid provider. Valid values: {string.Join(", ", Enum.GetNames<DataProviderType>())}");
+            }
+            
+            if (count <= 0 || count > 25)
+            {
+                throw new Trader.Core.Exceptions.ValidationException("Count must be between 1 and 25");
+            }
+            
+            // Get top crypto movers
+            var marketMovers = await marketMoversService.GetTopCryptoMoversAsync(count, shortTermTimeframeEnum, providerType);
+            
+            // Apply EMA filters
+            var filteredMarketMovers = await marketMoversService.ApplyEmaFiltersAsync(
+                marketMovers, shortTermTimeframeEnum, longTermTimeframeEnum, providerType);
+            
+            // Generate trade recommendations
+            var marketMoversWithRecommendations = await marketMoversService.GenerateTradeRecommendationsAsync(filteredMarketMovers);
+            
+            return Results.Ok(marketMoversWithRecommendations);
         })
         .WithName("GetTopCryptoMoversWithEmaFilters")
         .WithOpenApi(operation => {
