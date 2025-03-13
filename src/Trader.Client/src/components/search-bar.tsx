@@ -2,6 +2,13 @@ import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { TrendingUp, ArrowUp, ArrowDown, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import StockAnalysis from './stock-analysis';
 import { Card } from '@/components/ui/card';
 import { tradingApi, ApiError, TradingAnalysis } from '@/services/api';
@@ -15,6 +22,14 @@ const SearchBar = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<TradingAnalysis | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState('TwelveData');
+
+  // Available data providers
+  const providers = [
+    { value: 'TwelveData', label: 'TwelveData' },
+    { value: 'TraderMade', label: 'TraderMade' },
+    { value: 'Polygon', label: 'Polygon' },
+  ];
 
   // Mock data for top movers
   const topMovers = [
@@ -38,7 +53,7 @@ const SearchBar = () => {
     setError(null);
     
     try {
-      const data = await tradingApi.analyzePair(pairInput.trim());
+      const data = await tradingApi.analyzePair(pairInput.trim(), selectedProvider);
       setAnalysisPair(pairInput);
       setAnalysis(data);
     } catch (err) {
@@ -137,6 +152,25 @@ const SearchBar = () => {
                   className="bg-zinc-800 border-zinc-700 text-white placeholder:text-zinc-400"
                   disabled={isLoading}
                 />
+                <Select
+                  value={selectedProvider}
+                  onValueChange={setSelectedProvider}
+                >
+                  <SelectTrigger className="w-[140px] bg-zinc-800 border-zinc-700 text-white">
+                    <SelectValue placeholder="Select provider" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-800 border-zinc-700">
+                    {providers.map((provider) => (
+                      <SelectItem
+                        key={provider.value}
+                        value={provider.value}
+                        className="text-white hover:bg-zinc-700 focus:bg-zinc-700"
+                      >
+                        {provider.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Button
                   onClick={handleAnalyzeSubmit}
                   className="bg-teal-600 hover:bg-teal-700 text-white"

@@ -89,6 +89,9 @@ public class Program
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
         
+        // Configure CORS
+        builder.Services.ConfigureCors();
+        
         // Configure JSON serialization options
         builder.Services.ConfigureHttpJsonOptions(options => {
             options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
@@ -162,17 +165,6 @@ public class Program
             throw new InvalidOperationException("No sentiment analyzer could be configured. Please provide API keys.");
         }
         
-        // Enable CORS
-        builder.Services.AddCors(options =>
-        {
-            options.AddPolicy("AllowAll", builder =>
-            {
-                builder.AllowAnyOrigin()
-                       .AllowAnyMethod()
-                       .AllowAnyHeader();
-            });
-        });
-
         var app = builder.Build();
 
         // Configure the HTTP request pipeline
@@ -180,10 +172,21 @@ public class Program
         {
             app.UseSwagger();
             app.UseSwaggerUI();
+            
+            // In development, don't require HTTPS
+            app.Use(async (context, next) =>
+            {
+                context.Request.Scheme = "http";
+                await next();
+            });
+        }
+        else
+        {
+            app.UseHttpsRedirection();
         }
 
-        app.UseHttpsRedirection();
-        app.UseCors("AllowAll");
+        // Use CORS before other middleware
+        app.UseCors(CorsConfiguration.DefaultPolicy);
 
         // Define API endpoints
         // Endpoint to get prediction for a specific currency pair and timeframe
