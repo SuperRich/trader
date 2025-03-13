@@ -113,6 +113,7 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             // Fetch candle data for multiple timeframes
             var candleTasks = new[]
             {
+                _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Minutes5, 60),  // Get last 60 5-minute candles (5 hours)
                 _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours1, 24),
                 _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Hours4, 12),
                 _dataProvider.GetCandleDataAsync(symbol, ChartTimeframe.Day1, 30)  // Get 30 days of daily data
@@ -120,10 +121,10 @@ public class TradingViewAnalyzer : ISentimentAnalyzer
             
             await Task.WhenAll(candleTasks);
             
-            var candles1h = await candleTasks[0];
-            var candles4h = await candleTasks[1];
-            var candles1d = await candleTasks[2];
-            var candles5m = new List<CandleData>();
+            var candles5m = await candleTasks[0];
+            var candles1h = await candleTasks[1];
+            var candles4h = await candleTasks[2];
+            var candles1d = await candleTasks[3];
             
             await SaveChartDataToFile(symbol, candles5m, candles1h, candles4h, candles1d);
 
@@ -794,8 +795,19 @@ Always verify your information with reliable sources and include citations. Be a
         }
         sb.AppendLine();
 
-        // We're skipping daily and 5-minute data entirely
-        
+        // Add 5-minute candles (lowest priority)
+        sb.AppendLine("## 5-Minute Timeframe (Reference Only - Consider as Market Noise)");
+        if (candles5m.Count > 0)
+        {
+            sb.AppendLine($"Last {candles5m.Count} 5-minute candles:");
+            AppendCandleData(sb, candles5m);
+        }
+        else
+        {
+            sb.AppendLine("No 5-minute data available.");
+        }
+        sb.AppendLine();
+
         sb.AppendLine("Based on this data, provide a comprehensive analysis in the following JSON format:");
         sb.AppendLine();
         
@@ -807,7 +819,7 @@ Always verify your information with reliable sources and include citations. Be a
         sb.AppendLine("  \"stopLossPrice\": stop loss price as decimal,");
         sb.AppendLine("  \"takeProfitPrice\": target price as decimal,");
         sb.AppendLine("  \"bestEntryPrice\": optimal entry price as decimal,");
-        sb.AppendLine("  \"orderType\": \"Market\", \"Limit\", or \"Stop\",");
+        sb.AppendLine("  \"orderType\": \"Market\", \"Limit\", or \"Stop\" (IMPORTANT: This must be accurate based on bestEntryPrice vs currentPrice),");
         sb.AppendLine("  \"timeToBestEntry\": \"estimated time until best entry price is reached\",");
         sb.AppendLine("  \"validityPeriod\": \"how long this recommendation is valid for\",");
         sb.AppendLine("  \"isSafeToEnterAtCurrentPrice\": true or false,");
@@ -828,15 +840,25 @@ Always verify your information with reliable sources and include citations. Be a
         sb.AppendLine("}");
         sb.AppendLine();
 
-        sb.AppendLine("IMPORTANT: Your response must be a valid JSON object following this schema exactly. Do not include any text outside the JSON object.");
+        sb.AppendLine("IMPORTANT RULES FOR ORDER TYPE:");
+        sb.AppendLine("1. For BUY orders:");
+        sb.AppendLine("   - If bestEntryPrice < currentPrice: Use \"Limit\" (waiting for price to drop)");
+        sb.AppendLine("   - If bestEntryPrice > currentPrice: Use \"Stop\" (waiting for breakout confirmation)");
+        sb.AppendLine("   - If bestEntryPrice = currentPrice: Use \"Market\" (immediate execution)");
+        sb.AppendLine("2. For SELL orders:");
+        sb.AppendLine("   - If bestEntryPrice > currentPrice: Use \"Limit\" (waiting for price to rise)");
+        sb.AppendLine("   - If bestEntryPrice < currentPrice: Use \"Stop\" (waiting for breakdown confirmation)");
+        sb.AppendLine("   - If bestEntryPrice = currentPrice: Use \"Market\" (immediate execution)");
         sb.AppendLine();
 
         sb.AppendLine("Rules for the analysis:");
         sb.AppendLine("1. Only recommend a trade if there is a clear setup with a good risk-reward ratio (at least 1.5:1)");
         sb.AppendLine("2. If there's no clear trade opportunity, set direction to \"None\"");
-        sb.AppendLine("3. For orderType: Use \"Market\" for immediate execution, \"Limit\" for waiting for better price, \"Stop\" for breakout confirmation");
-        sb.AppendLine("4. Set isSafeToEnterAtCurrentPrice to true only if entering at current price is acceptable");
-        sb.AppendLine("5. For riskLevel: \"Low\" for strong confirmation, \"Medium\" for standard trades, \"High\" for less confirmation, \"Very High\" for counter-trend trades");
+        sb.AppendLine("3. Focus primarily on daily and 4-hour timeframes for trend direction");
+        sb.AppendLine("4. Use 1-hour timeframe for entry timing");
+        sb.AppendLine("5. Consider 5-minute data only as a reference for very short-term price action - DO NOT base main decisions on it");
+        sb.AppendLine("6. Set isSafeToEnterAtCurrentPrice to true only if entering at current price is acceptable");
+        sb.AppendLine("7. For riskLevel: \"Low\" for strong confirmation, \"Medium\" for standard trades, \"High\" for less confirmation, \"Very High\" for counter-trend trades");
         sb.AppendLine();
 
         sb.AppendLine("For inOutPlay: Only set available=true if ALL of these conditions are met:");
