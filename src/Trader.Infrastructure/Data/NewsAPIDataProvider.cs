@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Trader.Core.Services;
+using System.Linq;
 
 namespace Trader.Infrastructure.Data
 {
@@ -127,6 +128,9 @@ namespace Trader.Infrastructure.Data
         {
             string cacheKey = $"symbol_{symbol}_{count}";
             
+            // Reduce cache time for more frequent updates
+            const int CACHE_EXPIRATION_MINUTES = 5;
+            
             // Check cache first
             if (IsCacheValid(cacheKey))
             {
@@ -139,42 +143,55 @@ namespace Trader.Infrastructure.Data
                 _logger.LogInformation("Fetching news for symbol {Symbol}", symbol);
                 
                 // Construct query based on symbol
-                string query = symbol;
+                string query = "";
                 
-                // For forex pairs, add more context
+                // For forex pairs, add more specific context
                 if (symbol.Length == 6 && IsForexPair(symbol))
                 {
                     string baseCurrency = symbol.Substring(0, 3);
                     string quoteCurrency = symbol.Substring(3, 3);
                     
-                    query = $"({baseCurrency} AND {quoteCurrency}) OR {baseCurrency}/{quoteCurrency} OR forex OR \"foreign exchange\"";
+                    // Build a more targeted query for forex
+                    query = $"({baseCurrency}/{quoteCurrency} OR \"{baseCurrency} {quoteCurrency}\") AND (forex OR \"foreign exchange\" OR \"currency market\" OR \"exchange rate\")";
                     
-                    // Add currency names based on the pair
-                    query += GetCurrencyNames(baseCurrency, quoteCurrency);
+                    // Add currency-specific terms
+                    var currencyTerms = GetCurrencyTerms(baseCurrency, quoteCurrency);
+                    if (!string.IsNullOrEmpty(currencyTerms))
+                    {
+                        query += $" AND ({currencyTerms})";
+                    }
+                    
+                    // Add market-specific terms
+                    query += " AND (trading OR market OR price OR rate OR movement OR trend OR analysis OR forecast)";
                 }
-                // For crypto, add more context
+                // For crypto, add more specific context
                 else if (symbol.EndsWith("USD") && IsCryptoPair(symbol))
                 {
                     string crypto = symbol.Substring(0, symbol.Length - 3);
-                    query = $"{crypto} OR cryptocurrency OR crypto";
+                    string cryptoName = GetCryptoName(crypto);
                     
-                    // Add specific crypto names
+                    // Build a more targeted query for crypto
+                    query = $"({crypto} OR {cryptoName}) AND (cryptocurrency OR crypto OR \"digital currency\" OR \"digital asset\")";
+                    
+                    // Add market-specific terms
+                    query += " AND (trading OR market OR price OR blockchain OR analysis OR forecast OR trend)";
+                    
+                    // Add specific crypto context
                     if (crypto.Equals("BTC", StringComparison.OrdinalIgnoreCase))
                     {
-                        query += " OR Bitcoin";
+                        query += " AND (Bitcoin OR BTC OR \"crypto market\" OR \"digital gold\")";
                     }
                     else if (crypto.Equals("ETH", StringComparison.OrdinalIgnoreCase))
                     {
-                        query += " OR Ethereum";
-                    }
-                    else if (crypto.Equals("XRP", StringComparison.OrdinalIgnoreCase))
-                    {
-                        query += " OR Ripple";
+                        query += " AND (Ethereum OR ETH OR \"smart contracts\" OR DeFi)";
                     }
                 }
                 
-                // Construct the API URL
-                string url = $"https://newsapi.org/v2/everything?q={Uri.EscapeDataString(query)}&language=en&sortBy=publishedAt&pageSize={count}&apiKey={_apiKey}";
+                // Add time relevance to prioritize recent news
+                query += " AND (recent OR latest OR update OR today OR yesterday OR week OR analysis)";
+                
+                // Construct the API URL with sorting by relevance first
+                string url = $"https://newsapi.org/v2/everything?q={Uri.EscapeDataString(query)}&language=en&sortBy=relevancy&pageSize={count * 2}&apiKey={_apiKey}";
                 
                 // Make the API request
                 var response = await _httpClient.GetAsync(url);
@@ -192,8 +209,11 @@ namespace Trader.Infrastructure.Data
                     return new List<NewsArticle>();
                 }
                 
-                // Convert to our model
-                var articles = ConvertToNewsArticles(newsResponse.Articles, symbol);
+                // Convert to our model and filter for relevance
+                var articles = ConvertAndFilterNewsArticles(newsResponse.Articles, symbol);
+                
+                // Take only the most relevant articles up to the requested count
+                articles = articles.Take(count).ToList();
                 
                 // Cache the results
                 _newsCache[cacheKey] = new CacheEntry
@@ -562,6 +582,115 @@ namespace Trader.Infrastructure.Data
                 "BNB" => "Binance Coin",
                 _ => code
             };
+        }
+        
+        /// <summary>
+        /// Gets specific terms for currency pairs to improve relevance
+        /// </summary>
+        private string GetCurrencyTerms(string baseCurrency, string quoteCurrency)
+        {
+            var terms = new List<string>();
+            
+            // Add currency-specific terms
+            if (baseCurrency.Equals("EUR", StringComparison.OrdinalIgnoreCase))
+            {
+                terms.Add("ECB OR \"European Central Bank\" OR Eurozone OR \"Euro currency\"");
+            }
+            else if (baseCurrency.Equals("USD", StringComparison.OrdinalIgnoreCase))
+            {
+                terms.Add("Fed OR \"Federal Reserve\" OR \"US Dollar\" OR \"Dollar strength\"");
+            }
+            else if (baseCurrency.Equals("GBP", StringComparison.OrdinalIgnoreCase))
+            {
+                terms.Add("BoE OR \"Bank of England\" OR \"British Pound\" OR Sterling");
+            }
+            else if (baseCurrency.Equals("JPY", StringComparison.OrdinalIgnoreCase))
+            {
+                terms.Add("BoJ OR \"Bank of Japan\" OR \"Japanese Yen\" OR \"Yen strength\"");
+            }
+            
+            // Add quote currency terms if different
+            if (quoteCurrency.Equals("EUR", StringComparison.OrdinalIgnoreCase) && baseCurrency != "EUR")
+            {
+                terms.Add("ECB OR \"European Central Bank\" OR Eurozone");
+            }
+            else if (quoteCurrency.Equals("USD", StringComparison.OrdinalIgnoreCase) && baseCurrency != "USD")
+            {
+                terms.Add("Fed OR \"Federal Reserve\" OR \"US economy\"");
+            }
+            
+            return string.Join(" OR ", terms);
+        }
+        
+        /// <summary>
+        /// Converts and filters news articles for relevance
+        /// </summary>
+        private List<NewsArticle> ConvertAndFilterNewsArticles(List<NewsAPIArticle> apiArticles, string symbol)
+        {
+            var articles = new List<NewsArticle>();
+            var isForex = IsForexPair(symbol);
+            var isCrypto = IsCryptoPair(symbol);
+            
+            foreach (var apiArticle in apiArticles)
+            {
+                // Skip articles without sufficient content
+                if (string.IsNullOrWhiteSpace(apiArticle.Title) || string.IsNullOrWhiteSpace(apiArticle.Description))
+                {
+                    continue;
+                }
+                
+                var content = $"{apiArticle.Title} {apiArticle.Description}".ToLower();
+                
+                // Skip articles that don't mention the symbol or related terms
+                if (isForex)
+                {
+                    string baseCurrency = symbol.Substring(0, 3);
+                    string quoteCurrency = symbol.Substring(3, 3);
+                    
+                    // Check for currency mentions
+                    if (!content.Contains(baseCurrency.ToLower()) && !content.Contains(quoteCurrency.ToLower()) &&
+                        !content.Contains("forex") && !content.Contains("currency") && 
+                        !content.Contains("exchange rate"))
+                    {
+                        continue;
+                    }
+                }
+                else if (isCrypto)
+                {
+                    string crypto = symbol.Substring(0, symbol.Length - 3);
+                    string cryptoName = GetCryptoName(crypto).ToLower();
+                    
+                    // Check for crypto mentions
+                    if (!content.Contains(crypto.ToLower()) && !content.Contains(cryptoName) &&
+                        !content.Contains("crypto") && !content.Contains("bitcoin"))
+                    {
+                        continue;
+                    }
+                }
+                
+                var article = new NewsArticle
+                {
+                    Title = apiArticle.Title ?? string.Empty,
+                    Description = apiArticle.Description ?? string.Empty,
+                    Url = apiArticle.Url ?? string.Empty,
+                    ImageUrl = apiArticle.UrlToImage ?? string.Empty,
+                    Source = apiArticle.Source?.Name ?? string.Empty,
+                    PublishedAt = apiArticle.PublishedAt,
+                    Keywords = ExtractKeywords(apiArticle.Title, apiArticle.Description),
+                    RelatedSymbols = DetermineRelatedSymbols(apiArticle.Title, apiArticle.Description, symbol)
+                };
+                
+                // Determine sentiment and impact level based on content
+                DetermineSentimentAndImpact(article, apiArticle.Title, apiArticle.Description);
+                
+                // Only add articles with medium or high impact
+                if (article.ImpactLevel != "Low")
+                {
+                    articles.Add(article);
+                }
+            }
+            
+            return articles;
         }
     }
     
