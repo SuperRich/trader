@@ -49,6 +49,13 @@ export interface TradingAnalysis {
     timeframe: string;
     reason: string;
   };
+  relatedNews?: {
+    title: string;
+    description: string;
+    url: string;
+    publishedAt: string;
+    source: string;
+  }[];
 }
 
 export class ApiError extends Error {
@@ -141,7 +148,7 @@ export const tradingApi = {
   getMarketMovers: async (provider: string = 'TwelveData', count: number = 1): Promise<any> => {
     try {
       const response = await fetch(
-        `${config.apiBaseUrl}/api/market-movers/forex/ema-filtered?provider=${provider}&Count=${count}`,
+        `${config.apiBaseUrl}/api/market-movers/forex/ema-filtered?provider=${provider}&Count=${count}&includeNews=true`,
         {
           method: 'GET',
           headers: {

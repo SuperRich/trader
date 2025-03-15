@@ -45,4 +45,12 @@ public interface IMarketMoversService
     /// <param name="marketMovers">The market movers to generate recommendations for</param>
     /// <returns>The market movers with trade recommendations</returns>
     Task<List<MarketMover>> GenerateTradeRecommendationsAsync(List<MarketMover> marketMovers);
-} 
+    
+    /// <summary>
+    /// Enriches market movers with relevant news data
+    /// </summary>
+    /// <param name="marketMovers">The market movers to enrich</param>
+    /// <param name="newsCount">The number of news articles to fetch per market mover</param>
+    /// <returns>The market movers enriched with news data</returns>
+    Task<List<MarketMover>> EnrichWithNewsAsync(List<MarketMover> marketMovers, int newsCount = 3);
+}

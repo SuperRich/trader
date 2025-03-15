@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { TrendingUp, ArrowUp, ArrowDown, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import StockAnalysis from './stock-analysis';
+import NewsFeed from './news-feed';
 import { Card } from '@/components/ui/card';
 import { tradingApi, ApiError, TradingAnalysis } from '@/services/api';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -100,87 +101,94 @@ const SearchBar = () => {
               Get Top Movers
             </Button>
           ) : (
-            <Card className="w-full bg-zinc-900 border-zinc-800 p-4">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-medium text-white">Today's Top Movers</h3>
-                <div className="flex items-center gap-2">
-                  <Select value={selectedProvider} onValueChange={setSelectedProvider}>
-                    <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white w-32">
-                      <SelectValue placeholder="Select provider" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-zinc-800 border-zinc-700">
-                      {providers.map((provider) => (
-                        <SelectItem key={provider} value={provider} className="text-white hover:bg-zinc-700">
-                          {provider}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select 
-                    value={marketMoversCount.toString()} 
-                    onValueChange={(value) => setMarketMoversCount(parseInt(value))}
-                  >
-                    <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white w-20">
-                      <SelectValue placeholder="Count" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-zinc-800 border-zinc-700">
-                      {[1, 2, 3, 4, 5].map((count) => (
-                        <SelectItem key={count} value={count.toString()} className="text-white hover:bg-zinc-700">
-                          {count}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    onClick={handleGetTopMovers}
-                    className="bg-teal-600 hover:bg-teal-700 text-white"
-                    disabled={isLoadingMovers}
-                  >
-                    {isLoadingMovers ? (
-                      <>
-                        <Loader2 size={18} className="animate-spin mr-2" />
-                        Loading...
-                      </>
-                    ) : (
-                      'Refresh'
-                    )}
-                  </Button>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                {isLoadingMovers ? (
-                  <div className="col-span-2 flex justify-center py-8">
-                    <Loader2 size={24} className="animate-spin text-teal-500" />
-                  </div>
-                ) : marketMovers.length > 0 ? (
-                  marketMovers.map((mover, index) => (
-                    <div
-                      key={index}
-                      className="bg-zinc-800 p-3 rounded-lg flex justify-between items-center cursor-pointer hover:bg-zinc-700 transition-colors"
-                      onClick={() => handleSelectPair(mover.symbol)}
+            <div className="w-full">
+              <Card className="w-full bg-zinc-900 border-zinc-800 p-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-medium text-white">Today's Top Movers</h3>
+                  <div className="flex items-center gap-2">
+                    <Select value={selectedProvider} onValueChange={setSelectedProvider}>
+                      <SelectTrigger className="w-[140px] bg-zinc-800 border-zinc-700">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {providers.map((provider) => (
+                          <SelectItem key={provider} value={provider}>
+                            {provider}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      value={marketMoversCount.toString()}
+                      onValueChange={(value) => setMarketMoversCount(parseInt(value))}
                     >
-                      <div>
-                        <div className="font-medium text-white">{mover.symbol}</div>
-                        <div className="text-sm text-zinc-400">{mover.price}</div>
-                      </div>
-                      <div className={`flex items-center ${mover.change >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                        {mover.change >= 0 ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
-                        <span className="font-medium ml-1">{mover.change >= 0 ? '+' : ''}{mover.change}%</span>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="col-span-2 text-center py-4 text-zinc-400">
-                    No market movers data available
+                      <SelectTrigger className="w-[80px] bg-zinc-800 border-zinc-700">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {[1, 3, 5, 10].map((count) => (
+                          <SelectItem key={count} value={count.toString()}>
+                            {count}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      onClick={handleGetTopMovers}
+                      className="bg-teal-600 hover:bg-teal-700 text-white"
+                      disabled={isLoadingMovers}
+                    >
+                      {isLoadingMovers ? (
+                        <>
+                          <Loader2 size={18} className="animate-spin mr-2" />
+                          Loading...
+                        </>
+                      ) : (
+                        'Refresh'
+                      )}
+                    </Button>
                   </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-3">
+                    {isLoadingMovers ? (
+                      <div className="flex justify-center py-8">
+                        <Loader2 size={24} className="animate-spin text-teal-500" />
+                      </div>
+                    ) : marketMovers.length > 0 ? (
+                      marketMovers.map((mover, index) => (
+                        <div
+                          key={index}
+                          className="bg-zinc-800 p-3 rounded-lg flex justify-between items-center cursor-pointer hover:bg-zinc-700 transition-colors"
+                          onClick={() => handleSelectPair(mover.symbol)}
+                        >
+                          <div>
+                            <div className="font-medium text-white">{mover.symbol}</div>
+                            <div className="text-sm text-zinc-400">{mover.price}</div>
+                          </div>
+                          <div className={`flex items-center ${mover.change >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                            {mover.change >= 0 ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
+                            <span className="font-medium ml-1">{mover.change >= 0 ? '+' : ''}{mover.change}%</span>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-4 text-zinc-400">
+                        No market movers data available
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <NewsFeed marketMovers={marketMovers} isLoading={isLoadingMovers} />
+                  </div>
+                </div>
+                {error && (
+                  <Alert variant="destructive" className="mt-4">
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
                 )}
-              </div>
-              {error && (
-                <Alert variant="destructive" className="mt-4">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-            </Card>
+              </Card>
+            </div>
           )}
         </div>
       </div>

@@ -142,6 +142,30 @@ const StockAnalysis = ({ pair, analysis }: StockAnalysisProps) => {
           </div>
         )}
 
+        {analysis.relatedNews && analysis.relatedNews.length > 0 && (
+          <div className="mt-6 pt-4 border-t border-zinc-800">
+            <h3 className="text-lg font-semibold text-white mb-3">Related News</h3>
+            <div className="space-y-3">
+              {analysis.relatedNews.map((news, index) => (
+                <a
+                  key={index}
+                  href={news.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block bg-zinc-800 p-3 rounded-lg hover:bg-zinc-700 transition-colors"
+                >
+                  <h4 className="text-white font-medium mb-1">{news.title}</h4>
+                  <p className="text-zinc-400 text-sm mb-2">{news.description}</p>
+                  <div className="flex justify-between text-xs text-zinc-500">
+                    <span>{news.source}</span>
+                    <span>{new Date(news.publishedAt).toLocaleDateString()}</span>
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="mt-6 pt-4 border-t border-zinc-800 text-center">
           <div className="text-sm text-zinc-400">
             Analysis powered by {analysis.modelUsed || 'AI'} • Valid until {new Date(analysis.validUntil).toLocaleString()}

@@ -17,6 +17,16 @@ public class KeyRequest
     public bool SaveToUserSecrets { get; set; } = false;
 }
 
+/// <summary>
+/// Request model for setting the NewsAPI key
+/// </summary>
+public class NewsAPIKeyRequest
+{
+    [Required]
+    public string ApiKey { get; set; } = string.Empty;
+    public bool SaveToUserSecrets { get; set; } = false;
+}
+
 // Request model for Polygon API key
 public class PolygonKeyRequest
 {
@@ -113,6 +123,14 @@ public class Program
             builder.Services.AddHttpClient<PolygonDataProvider>();
             builder.Services.AddSingleton<PolygonDataProvider>();
             Console.WriteLine("Registered Polygon data provider");
+        }
+        
+        // Register NewsAPI data provider if API key is available
+        if (!string.IsNullOrEmpty(builder.Configuration["NewsAPI:ApiKey"]) || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NEWSAPI_KEY")))
+        {
+            builder.Services.AddHttpClient<NewsAPIDataProvider>();
+            builder.Services.AddSingleton<INewsDataProvider, NewsAPIDataProvider>();
+            Console.WriteLine("Registered NewsAPI data provider");
         }
         
         if (!string.IsNullOrEmpty(builder.Configuration["TwelveData:ApiKey"]))
@@ -1262,6 +1280,171 @@ public class Program
                 }
             });
         
+        // Endpoint to set NewsAPI key
+        app.MapPost("/api/diagnostics/set-newsapi-key", 
+            async (NewsAPIKeyRequest request, IConfiguration configuration, ILogger<Program> logger) =>
+            {
+                if (string.IsNullOrEmpty(request.ApiKey))
+                {
+                    return Results.BadRequest("API key cannot be empty");
+                }
+                
+                try
+                {
+                    // Test if the key is valid by making a simple API call
+                    var httpClient = new HttpClient();
+                    httpClient.DefaultRequestHeaders.Add("User-Agent", "TraderApp/1.0");
+                    var testUrl = $"https://newsapi.org/v2/everything?q=forex&language=en&pageSize=1&apiKey={request.ApiKey}";
+                    
+                    logger.LogInformation("Testing NewsAPI with key starting with {KeyPrefix}", 
+                        request.ApiKey.Length > 4 ? request.ApiKey[..4] + "..." : "too short");
+                    
+                    var response = await httpClient.GetAsync(testUrl);
+                    var responseContent = await response.Content.ReadAsStringAsync();
+                    
+                    logger.LogInformation("NewsAPI response: Status: {Status}, Content: {Content}", 
+                        response.StatusCode, responseContent);
+                        
+                    var isValid = response.IsSuccessStatusCode;
+                    var statusMessage = isValid 
+                        ? "Valid API key" 
+                        : $"Invalid API key: {response.StatusCode}. Response: {responseContent}";
+                    
+                    // Set the environment variable regardless of validation result
+                    Environment.SetEnvironmentVariable("NEWSAPI_KEY", request.ApiKey, EnvironmentVariableTarget.Process);
+                    
+                    // Only save the key if it's valid and user wants to save
+                    if (isValid && request.SaveToUserSecrets)
+                    {
+                        try
+                        {
+                            // Save to user secrets
+                            var userSecretsId = "trader-app-secrets-id";
+                            var userSecretsPath = Path.Combine(
+                                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                                "Microsoft", "UserSecrets", userSecretsId);
+                                
+                            Directory.CreateDirectory(userSecretsPath);
+                            
+                            var secretsFilePath = Path.Combine(userSecretsPath, "secrets.json");
+                            
+                            // Read existing secrets if they exist
+                            Dictionary<string, string> secrets;
+                            if (File.Exists(secretsFilePath))
+                            {
+                                var existingJson = await File.ReadAllTextAsync(secretsFilePath);
+                                secrets = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(existingJson) 
+                                    ?? new Dictionary<string, string>();
+                            }
+                            else
+                            {
+                                secrets = new Dictionary<string, string>();
+                            }
+                            
+                            // Add/update the NewsAPI key
+                            secrets["NewsAPI:ApiKey"] = request.ApiKey;
+                            
+                            await File.WriteAllTextAsync(
+                                secretsFilePath, 
+                                System.Text.Json.JsonSerializer.Serialize(secrets, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                                
+                            logger.LogInformation("Saved valid NewsAPI key to user secrets at {Path}", secretsFilePath);
+                            
+                            // Also create a .env file entry
+                            var envFilePath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+                            string envContent = "";
+                            
+                            if (File.Exists(envFilePath))
+                            {
+                                envContent = await File.ReadAllTextAsync(envFilePath);
+                            }
+                            
+                            // Update or add the NewsAPI key
+                            var envVarName = "TRADER_NEWSAPI_KEY";
+                            if (envContent.Contains(envVarName))
+                            {
+                                // Replace existing line
+                                var lines = envContent.Split('\n');
+                                for (int i = 0; i < lines.Length; i++)
+                                {
+                                    if (lines[i].StartsWith(envVarName))
+                                    {
+                                        lines[i] = $"{envVarName}={request.ApiKey}";
+                                        break;
+                                    }
+                                }
+                                envContent = string.Join('\n', lines);
+                            }
+                            else
+                            {
+                                // Add new line
+                                if (!string.IsNullOrEmpty(envContent) && !envContent.EndsWith('\n'))
+                                {
+                                    envContent += '\n';
+                                }
+                                envContent += $"{envVarName}={request.ApiKey}\n";
+                            }
+                            
+                            await File.WriteAllTextAsync(envFilePath, envContent);
+                            logger.LogInformation("Also saved NewsAPI key to .env file at {Path}", envFilePath);
+                            
+                            // Update appsettings.Development.json if it exists
+                            var appSettingsDevPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.Development.json");
+                            if (File.Exists(appSettingsDevPath))
+                            {
+                                try
+                                {
+                                    var json = await File.ReadAllTextAsync(appSettingsDevPath);
+                                    
+                                    // Check if NewsAPI section exists
+                                    if (json.Contains("\"NewsAPI\": {"))
+                                    {
+                                        var updated = System.Text.RegularExpressions.Regex.Replace(
+                                            json,
+                                            "\"ApiKey\":\\s*\"[^\"]*\"",
+                                            $"\"ApiKey\": \"{request.ApiKey}\"");
+                                            
+                                        await File.WriteAllTextAsync(appSettingsDevPath, updated);
+                                    }
+                                    else
+                                    {
+                                        // Insert NewsAPI section before the closing brace
+                                        var lastBrace = json.LastIndexOf('}');
+                                        if (lastBrace > 0)
+                                        {
+                                            var updated = json.Insert(lastBrace, $",\n  \"NewsAPI\": {{\n    \"ApiKey\": \"{request.ApiKey}\"\n  }}\n");
+                                            await File.WriteAllTextAsync(appSettingsDevPath, updated);
+                                        }
+                                    }
+                                    
+                                    logger.LogInformation("Updated NewsAPI key in {Path}", appSettingsDevPath);
+                                }
+                                catch (Exception ex)
+                                {
+                                    logger.LogWarning(ex, "Failed to update appsettings.Development.json");
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Failed to save NewsAPI key to some locations");
+                        }
+                    }
+                    
+                    return Results.Ok(new 
+                    { 
+                        IsValid = isValid,
+                        StatusMessage = statusMessage,
+                        SavedToUserSecrets = isValid && request.SaveToUserSecrets
+                    });
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error testing NewsAPI key");
+                    return Results.Problem($"Error testing API key: {ex.Message}");
+                }
+            });
+        
         // Endpoint to set OpenRouter model
         app.MapPost("/api/diagnostics/set-openrouter-model", 
             async (OpenRouterModelRequest request, IConfiguration configuration, ILogger<Program> logger) =>
@@ -1302,7 +1485,7 @@ public class Program
                     await File.WriteAllTextAsync(
                         secretsFilePath, 
                         System.Text.Json.JsonSerializer.Serialize(secrets, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-                            
+                                
                     logger.LogInformation("Saved OpenRouter model to user secrets at {Path}", secretsFilePath);
                     
                     // Also create a .env file entry
@@ -1402,6 +1585,7 @@ public class Program
                 var tradermadeApiKey = configuration["TraderMade:ApiKey"] ?? configuration["TRADER_TRADERMADE_API_KEY"];
                 var twelvedataApiKey = configuration["TwelveData:ApiKey"] ?? configuration["TRADER_TWELVEDATA_API_KEY"];
                 var openrouterApiKey = configuration["OpenRouter:ApiKey"] ?? configuration["TRADER_OPENROUTER_API_KEY"];
+                var newsapiKey = configuration["NewsAPI:ApiKey"] ?? Environment.GetEnvironmentVariable("NEWSAPI_KEY");
                 var openrouterModel = configuration["OpenRouter:Model"] ?? "anthropic/claude-3-opus:beta"; // Default model
                 
                 var hasPerplexity = !string.IsNullOrEmpty(perplexityApiKey);
@@ -1409,9 +1593,10 @@ public class Program
                 var hasTraderMade = !string.IsNullOrEmpty(tradermadeApiKey);
                 var hasTwelveData = !string.IsNullOrEmpty(twelvedataApiKey);
                 var hasOpenRouter = !string.IsNullOrEmpty(openrouterApiKey);
+                var hasNewsAPI = !string.IsNullOrEmpty(newsapiKey);
                 
-                logger.LogInformation("Configuration check: Perplexity API key: {HasKey}, Polygon API key: {HasPolygon}, TraderMade API key: {HasTraderMade}, TwelveData API key: {HasTwelveData}, OpenRouter API key: {HasOpenRouter}",
-                    hasPerplexity, hasPolygon, hasTraderMade, hasTwelveData, hasOpenRouter);
+                logger.LogInformation("Configuration check: Perplexity API key: {HasKey}, Polygon API key: {HasPolygon}, TraderMade API key: {HasTraderMade}, TwelveData API key: {HasTwelveData}, OpenRouter API key: {HasOpenRouter}, NewsAPI key: {HasNewsAPI}",
+                    hasPerplexity, hasPolygon, hasTraderMade, hasTwelveData, hasOpenRouter, hasNewsAPI);
                 
                 var defaultProvider = hasPolygon ? "Polygon" : hasTraderMade ? "TraderMade" : hasTwelveData ? "TwelveData" : "Mock";
                 var defaultSentimentAnalyzer = hasOpenRouter ? "OpenRouter" : hasPerplexity ? "Perplexity" : "None";
@@ -1423,6 +1608,7 @@ public class Program
                     HasTraderMadeApiKey = hasTraderMade,
                     HasTwelveDataApiKey = hasTwelveData,
                     HasOpenRouterApiKey = hasOpenRouter,
+                    HasNewsAPIKey = hasNewsAPI,
                     DefaultDataProvider = defaultProvider,
                     DefaultSentimentAnalyzer = defaultSentimentAnalyzer,
                     OpenRouterModel = openrouterModel,
@@ -1440,6 +1626,9 @@ public class Program
                         : null,
                     OpenRouterKeyPrefix = hasOpenRouter && !string.IsNullOrEmpty(openrouterApiKey) && openrouterApiKey.Length > 4 
                         ? openrouterApiKey.Substring(0, 4) + "..." 
+                        : null,
+                    NewsAPIKeyPrefix = hasNewsAPI && !string.IsNullOrEmpty(newsapiKey) && newsapiKey.Length > 4 
+                        ? newsapiKey.Substring(0, 4) + "..." 
                         : null
                 });
             })
@@ -1535,7 +1724,8 @@ public class Program
             int count = 10,
             string shortTermTimeframe = "Hours1",
             string longTermTimeframe = "Day1",
-            string provider = "TraderMade") =>
+            string provider = "TraderMade",
+            bool includeNews = false) =>
         {
             try
             {
@@ -1569,6 +1759,12 @@ public class Program
                 // Generate trade recommendations
                 var marketMoversWithRecommendations = await marketMoversService.GenerateTradeRecommendationsAsync(filteredMarketMovers);
                 
+                // Enrich with news if requested
+                if (includeNews)
+                {
+                    marketMoversWithRecommendations = await marketMoversService.EnrichWithNewsAsync(marketMoversWithRecommendations);
+                }
+                
                 return Results.Ok(marketMoversWithRecommendations);
             }
             catch (Exception ex)
@@ -1583,6 +1779,58 @@ public class Program
             return operation;
         });
         
+        // Endpoint to get news for a specific currency pair
+        app.MapGet("/api/news/symbol/{symbol}", 
+            async (string symbol, [FromServices] INewsDataProvider newsDataProvider, [FromServices] ILogger<Program> logger, int? count = null) =>
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(symbol))
+                    {
+                        return Results.BadRequest("Symbol is required");
+                    }
+                    
+                    var newsCount = count.HasValue && count.Value > 0 && count.Value <= 25 ? count.Value : 10;
+                    
+                    logger.LogInformation("Getting news for symbol {Symbol}", symbol);
+                    var news = await newsDataProvider.GetSymbolNewsAsync(symbol, newsCount);
+                    return Results.Ok(news);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error getting news for symbol {Symbol}", symbol);
+                    return Results.Problem($"Error getting news: {ex.Message}", statusCode: 500);
+                }
+            })
+            .WithName("GetSymbolNews")
+            .WithOpenApi();
+            
+        // Endpoint to get economic news for a specific region
+        app.MapGet("/api/news/region/{region}", 
+            async (string region, [FromServices] INewsDataProvider newsDataProvider, [FromServices] ILogger<Program> logger, int? count = null) =>
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(region))
+                    {
+                        return Results.BadRequest("Region is required");
+                    }
+                    
+                    var newsCount = count.HasValue && count.Value > 0 && count.Value <= 25 ? count.Value : 10;
+                    
+                    logger.LogInformation("Getting economic news for region {Region}", region);
+                    var news = await newsDataProvider.GetEconomicNewsAsync(region, newsCount);
+                    return Results.Ok(news);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error getting economic news for region {Region}", region);
+                    return Results.Problem($"Error getting news: {ex.Message}", statusCode: 500);
+                }
+            })
+            .WithName("GetRegionNews")
+            .WithOpenApi();
+        
         // Get top crypto market movers with EMA filters
         app.MapGet("/api/market-movers/crypto/ema-filtered", async (
             IMarketMoversService marketMoversService,
@@ -1590,7 +1838,8 @@ public class Program
             int count = 10,
             string shortTermTimeframe = "Hours1",
             string longTermTimeframe = "Day1",
-            string provider = "TraderMade") =>
+            string provider = "TraderMade",
+            bool includeNews = false) =>
         {
             try
             {
@@ -1623,6 +1872,12 @@ public class Program
                 
                 // Generate trade recommendations
                 var marketMoversWithRecommendations = await marketMoversService.GenerateTradeRecommendationsAsync(filteredMarketMovers);
+                
+                // Enrich with news if requested
+                if (includeNews)
+                {
+                    marketMoversWithRecommendations = await marketMoversService.EnrichWithNewsAsync(marketMoversWithRecommendations);
+                }
                 
                 return Results.Ok(marketMoversWithRecommendations);
             }

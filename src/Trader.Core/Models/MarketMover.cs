@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Trader.Core.Services;
 
 namespace Trader.Core.Models;
 
@@ -71,6 +72,11 @@ public class MarketMover
     /// The recommended trade based on EMA analysis
     /// </summary>
     public TradeRecommendation? RecommendedTrade { get; set; }
+    
+    /// <summary>
+    /// Related news articles for this market mover
+    /// </summary>
+    public List<NewsArticle> RelatedNews { get; set; } = new List<NewsArticle>();
 }
 
 /// <summary>
@@ -277,4 +283,4 @@ public enum OrderType
     /// Sell when price falls to a specified level below current price
     /// </summary>
     StopSell
-} 
+}

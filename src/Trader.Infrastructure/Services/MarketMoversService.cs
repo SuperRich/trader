@@ -3,6 +3,7 @@ using Trader.Core.Models;
 using Trader.Core.Services;
 using System.Text;
 using Trader.Infrastructure.Data;
+using System.Collections.Concurrent;
 
 namespace Trader.Infrastructure.Services;
 
@@ -12,6 +13,7 @@ namespace Trader.Infrastructure.Services;
 public class MarketMoversService : IMarketMoversService
 {
     private readonly IForexDataProviderFactory _dataProviderFactory;
+    private readonly INewsDataProvider? _newsDataProvider;
     private readonly ILogger<MarketMoversService> _logger;
     
     // Common forex pairs to analyze
@@ -57,10 +59,12 @@ public class MarketMoversService : IMarketMoversService
     
     public MarketMoversService(
         IForexDataProviderFactory dataProviderFactory,
-        ILogger<MarketMoversService> logger)
+        ILogger<MarketMoversService> logger,
+        INewsDataProvider? newsDataProvider = null)
     {
         _dataProviderFactory = dataProviderFactory ?? throw new ArgumentNullException(nameof(dataProviderFactory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _newsDataProvider = newsDataProvider;
     }
     
     /// <inheritdoc />
@@ -1086,6 +1090,94 @@ public class MarketMoversService : IMarketMoversService
         }
     }
     
+    /// <inheritdoc />
+    public async Task<List<MarketMover>> EnrichWithNewsAsync(List<MarketMover> marketMovers, int newsCount = 3)
+    {
+        if (_newsDataProvider == null)
+        {
+            _logger.LogWarning("NewsDataProvider is not available. Cannot enrich market movers with news data.");
+            return marketMovers;
+        }
+        
+        _logger.LogInformation("Enriching {Count} market movers with news data", marketMovers.Count);
+        
+        // Use ConcurrentBag to collect results from parallel tasks
+        var enrichedMovers = new ConcurrentBag<MarketMover>();
+        var tasks = new List<Task>();
+        
+        // Process each market mover in parallel to speed up news fetching
+        foreach (var marketMover in marketMovers)
+        {
+            tasks.Add(Task.Run(async () =>
+            {
+                try
+                {
+                    _logger.LogInformation("Fetching news for {Symbol}", marketMover.Symbol);
+                    
+                    // Get news for the symbol
+                    var news = await _newsDataProvider.GetSymbolNewsAsync(marketMover.Symbol, newsCount);
+                    
+                    // If we didn't get any news, try to get news for the base currency
+                    if (news.Count == 0 && marketMover.Symbol.Length >= 3)
+                    {
+                        string baseCurrency = marketMover.Symbol.Substring(0, 3);
+                        string region = GetRegionFromCurrency(baseCurrency);
+                        
+                        if (!string.IsNullOrEmpty(region))
+                        {
+                            _logger.LogInformation("No specific news found for {Symbol}, trying region news for {Region}", 
+                                marketMover.Symbol, region);
+                            
+                            news = await _newsDataProvider.GetEconomicNewsAsync(region, newsCount);
+                        }
+                    }
+                    
+                    // Add news to the market mover
+                    marketMover.RelatedNews = news;
+                    
+                    // Add to the result collection
+                    enrichedMovers.Add(marketMover);
+                    
+                    _logger.LogInformation("Added {Count} news articles to {Symbol}", news.Count, marketMover.Symbol);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error fetching news for {Symbol}", marketMover.Symbol);
+                    
+                    // Still add the market mover to the result, just without news
+                    enrichedMovers.Add(marketMover);
+                }
+            }));
+        }
+        
+        // Wait for all tasks to complete
+        await Task.WhenAll(tasks);
+        
+        // Convert back to a sorted list
+        return enrichedMovers
+            .OrderByDescending(m => Math.Abs(m.PipMovement))
+            .ToList();
+    }
+    
+    /// <summary>
+    /// Maps a currency code to a region for news lookup
+    /// </summary>
+    private string GetRegionFromCurrency(string currencyCode)
+    {
+        return currencyCode.ToUpperInvariant() switch
+        {
+            "USD" => "US",
+            "EUR" => "EU",
+            "GBP" => "UK",
+            "JPY" => "Japan",
+            "AUD" => "Australia",
+            "CAD" => "Canada",
+            "CHF" => "Switzerland",
+            "NZD" => "New Zealand",
+            _ => string.Empty
+        };
+    }
+    
     /// <summary>
     /// Generates a rationale for the trade recommendation
     /// </summary>
@@ -1122,6 +1214,39 @@ public class MarketMoversService : IMarketMoversService
             }
         }
         
+        // Add news sentiment if available
+        if (marketMover.RelatedNews.Count > 0)
+        {
+            sb.AppendLine("News Sentiment:");
+            
+            // Count positive, negative, and neutral news
+            int positive = marketMover.RelatedNews.Count(n => n.Sentiment == "Positive");
+            int negative = marketMover.RelatedNews.Count(n => n.Sentiment == "Negative");
+            int neutral = marketMover.RelatedNews.Count(n => n.Sentiment == "Neutral");
+            
+            // Determine overall sentiment
+            string overallSentiment;
+            if (positive > negative && positive > neutral)
+                overallSentiment = "Positive";
+            else if (negative > positive && negative > neutral)
+                overallSentiment = "Negative";
+            else
+                overallSentiment = "Neutral";
+            
+            sb.AppendLine($"- Overall: {overallSentiment} ({positive} positive, {negative} negative, {neutral} neutral)");
+            
+            // Add high impact news if any
+            var highImpactNews = marketMover.RelatedNews.Where(n => n.ImpactLevel == "High").ToList();
+            if (highImpactNews.Count > 0)
+            {
+                sb.AppendLine("- High Impact News:");
+                foreach (var news in highImpactNews.Take(2)) // Limit to 2 high impact news
+                {
+                    sb.AppendLine($"  * {news.Title} ({news.Sentiment})");
+                }
+            }
+        }
+        
         // Add trade details
         sb.AppendLine($"Entry: {recommendation.EntryPrice}");
         sb.AppendLine($"Stop Loss: {recommendation.StopLossPrice}");
@@ -1130,4 +1255,4 @@ public class MarketMoversService : IMarketMoversService
         
         return sb.ToString();
     }
-} 
+}
