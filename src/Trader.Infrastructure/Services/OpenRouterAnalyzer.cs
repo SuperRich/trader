@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Trader.Core.Services;
@@ -16,6 +18,25 @@ public class OpenRouterAnalyzer : ISentimentAnalyzer
     private readonly string _apiKey;
     private readonly ILogger<OpenRouterAnalyzer> _logger;
     private readonly string _model;
+    private readonly JsonSerializerOptions _jsonOptions;
+    private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(5, 5); // Limit concurrent requests
+    private readonly ConcurrentDictionary<string, CacheItem> _cache = new ConcurrentDictionary<string, CacheItem>();
+    private readonly TimeSpan _cacheExpiration = TimeSpan.FromMinutes(15);
+    
+    // Simple cache item class
+    private class CacheItem
+    {
+        public object Data { get; set; }
+        public DateTime Expiration { get; set; }
+        
+        public CacheItem(object data, TimeSpan expiration)
+        {
+            Data = data;
+            Expiration = DateTime.UtcNow.Add(expiration);
+        }
+        
+        public bool IsExpired => DateTime.UtcNow > Expiration;
+    }
 
     /// <summary>
     /// Initializes a new instance of the OpenRouterAnalyzer class.
@@ -44,16 +65,28 @@ public class OpenRouterAnalyzer : ISentimentAnalyzer
         
         // Get the model from configuration or use a default
         var configModel = configuration["OpenRouter:Model"];
-        _model = !string.IsNullOrEmpty(configModel) ? configModel : "anthropic/claude-3-opus:beta";
+        _model = !string.IsNullOrEmpty(configModel) ? configModel : "openai/o3-mini-high";
         
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         
-        // Set up HttpClient
+        // Set up HttpClient with timeout
         _httpClient.BaseAddress = new Uri("https://openrouter.ai/api/v1/");
         _httpClient.DefaultRequestHeaders.Accept.Clear();
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
         _httpClient.DefaultRequestHeaders.Add("HTTP-Referer", "https://trader.app"); // Required by OpenRouter
+        _httpClient.DefaultRequestHeaders.Add("X-Title", "Trader App");
+        _httpClient.Timeout = TimeSpan.FromMinutes(2); // Set a reasonable timeout
+        
+        // Configure JSON options
+        _jsonOptions = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            WriteIndented = false,
+            AllowTrailingCommas = true,
+            ReadCommentHandling = JsonCommentHandling.Skip
+        };
     }
 
     /// <summary>
@@ -63,8 +96,26 @@ public class OpenRouterAnalyzer : ISentimentAnalyzer
     /// <returns>A SentimentAnalysisResult containing sentiment data for the specified currency pair.</returns>
     public async Task<SentimentAnalysisResult> AnalyzeSentimentAsync(string currencyPair)
     {
+        // Check cache first
+        string cacheKey = $"sentiment_{currencyPair}";
+        if (_cache.TryGetValue(cacheKey, out var cacheItem) && !cacheItem.IsExpired)
+        {
+            _logger.LogInformation("Retrieved cached sentiment analysis for {CurrencyPair}", currencyPair);
+            return (SentimentAnalysisResult)cacheItem.Data;
+        }
+        
+        // Acquire semaphore to limit concurrent requests
+        await _semaphore.WaitAsync();
+        
         try
         {
+            // Check cache again in case another thread populated it while we were waiting
+            if (_cache.TryGetValue(cacheKey, out cacheItem) && !cacheItem.IsExpired)
+            {
+                _logger.LogInformation("Retrieved cached sentiment analysis for {CurrencyPair} after semaphore wait", currencyPair);
+                return (SentimentAnalysisResult)cacheItem.Data;
+            }
+            
             var prompt = $"Analyze the current market sentiment for the {currencyPair} forex pair. Consider recent economic news, technical analysis, and market trends. Provide a summary of bullish and bearish factors, and conclude with whether the overall sentiment is bullish, bearish, or neutral. Include specific data points and cite reliable sources for your analysis. Format your response as JSON with the following structure: {{\"sentiment\": \"bullish|bearish|neutral\", \"confidence\": 0.0-1.0, \"factors\": [list of factors], \"summary\": \"brief summary\", \"sources\": [list of sources with URLs]}}";
 
             var requestBody = new
@@ -76,20 +127,28 @@ public class OpenRouterAnalyzer : ISentimentAnalyzer
                     new { role = "user", content = prompt }
                 },
                 temperature = 0.1,
-                max_tokens = 1000
+                max_tokens = 1000,
+                response_format = new { type = "json_object" } // Request JSON directly
             };
 
             var content = new StringContent(
-                JsonSerializer.Serialize(requestBody),
+                JsonSerializer.Serialize(requestBody, _jsonOptions),
                 Encoding.UTF8,
                 "application/json");
 
-            var response = await _httpClient.PostAsync("chat/completions", content);
+            // Create request message for more control
+            var request = new HttpRequestMessage(HttpMethod.Post, "chat/completions")
+            {
+                Content = content
+            };
+            
+            // Use HttpCompletionOption.ResponseHeadersRead for streaming
+            var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
             response.EnsureSuccessStatusCode();
 
-            var responseString = await response.Content.ReadAsStringAsync();
-            _logger.LogDebug("Received response: {Response}", responseString);
-            var responseObject = JsonSerializer.Deserialize<OpenRouterResponse>(responseString);
+            // Read response as stream for better performance
+            using var responseStream = await response.Content.ReadAsStreamAsync();
+            var responseObject = await JsonSerializer.DeserializeAsync<OpenRouterResponse>(responseStream, _jsonOptions);
             
             if (responseObject?.choices == null || responseObject.choices.Length == 0)
             {
@@ -100,35 +159,54 @@ public class OpenRouterAnalyzer : ISentimentAnalyzer
             string modelUsed = !string.IsNullOrEmpty(responseObject.model) ? responseObject.model : _model;
             _logger.LogInformation("OpenRouter selected model: {Model} for analysis of {CurrencyPair}", modelUsed, currencyPair);
 
-            // Extract the JSON from the response text
+            // Get the response content
             var responseContent = responseObject.choices[0].message.content;
-            var jsonStartIndex = responseContent.IndexOf('{');
-            var jsonEndIndex = responseContent.LastIndexOf('}');
             
-            if (jsonStartIndex == -1 || jsonEndIndex == -1)
+            // Parse the JSON response directly
+            SentimentData? sentimentData = null;
+            
+            try
             {
-                throw new Exception("Could not extract JSON from response");
+                // Try to parse directly first
+                sentimentData = JsonSerializer.Deserialize<SentimentData>(responseContent, _jsonOptions);
             }
+            catch (JsonException)
+            {
+                // If direct parsing fails, try to extract JSON from the response
+                _logger.LogWarning("Direct JSON parsing failed, attempting to extract JSON from response");
+                var jsonStartIndex = responseContent.IndexOf('{');
+                var jsonEndIndex = responseContent.LastIndexOf('}');
                 
-            var jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
-            var sentimentData = JsonSerializer.Deserialize<SentimentData>(jsonContent);
+                if (jsonStartIndex == -1 || jsonEndIndex == -1)
+                {
+                    throw new Exception("Could not extract JSON from response");
+                }
+                    
+                var jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
+                sentimentData = JsonSerializer.Deserialize<SentimentData>(jsonContent, _jsonOptions);
+            }
             
             if (sentimentData == null)
             {
                 throw new Exception("Could not parse sentiment data");
             }
 
-            return new SentimentAnalysisResult
+            var result = new SentimentAnalysisResult
             {
                 CurrencyPair = currencyPair,
                 Sentiment = ParseSentiment(sentimentData.sentiment),
                 Confidence = sentimentData.confidence,
-                Factors = sentimentData.factors != null ? sentimentData.factors : new List<string>(),
+                Factors = sentimentData.factors ?? new List<string>(),
                 Summary = sentimentData.summary,
-                Sources = sentimentData.sources != null ? sentimentData.sources : new List<string>(),
+                Sources = sentimentData.sources ?? new List<string>(),
                 Timestamp = DateTime.UtcNow,
                 ModelUsed = modelUsed
             };
+            
+            // Cache the result
+            _cache[cacheKey] = new CacheItem(result, _cacheExpiration);
+            
+            return result;
         }
         catch (Exception ex)
         {
@@ -147,6 +225,11 @@ public class OpenRouterAnalyzer : ISentimentAnalyzer
                 ModelUsed = "Error - model information unavailable"
             };
         }
+        finally
+        {
+            // Release the semaphore
+            _semaphore.Release();
+        }
     }
     
     /// <summary>
@@ -157,8 +240,26 @@ public class OpenRouterAnalyzer : ISentimentAnalyzer
     /// <returns>A list of trading recommendations for the most promising forex pairs.</returns>
     public async Task<List<ForexRecommendation>> GetTradingRecommendationsAsync(int count = 3, string? provider = null)
     {
+        // Check cache first
+        string cacheKey = $"recommendations_{count}_{provider ?? "default"}";
+        if (_cache.TryGetValue(cacheKey, out var cacheItem) && !cacheItem.IsExpired)
+        {
+            _logger.LogInformation("Retrieved cached trading recommendations");
+            return (List<ForexRecommendation>)cacheItem.Data;
+        }
+        
+        // Acquire semaphore to limit concurrent requests
+        await _semaphore.WaitAsync();
+        
         try
         {
+            // Check cache again in case another thread populated it while we were waiting
+            if (_cache.TryGetValue(cacheKey, out cacheItem) && !cacheItem.IsExpired)
+            {
+                _logger.LogInformation("Retrieved cached trading recommendations after semaphore wait");
+                return (List<ForexRecommendation>)cacheItem.Data;
+            }
+            
             var prompt = $@"
 You are a forex trading expert. I need you to provide exactly {count} forex trading recommendations with ACCURATE, VERIFIED price data.
 
@@ -218,20 +319,28 @@ YOU MUST:
                     new { role = "user", content = prompt }
                 },
                 temperature = 0.2,
-                max_tokens = 1500
+                max_tokens = 1500,
+                response_format = new { type = "json_object" } // Request JSON directly
             };
 
             var content = new StringContent(
-                JsonSerializer.Serialize(requestBody),
+                JsonSerializer.Serialize(requestBody, _jsonOptions),
                 Encoding.UTF8,
                 "application/json");
 
-            var response = await _httpClient.PostAsync("chat/completions", content);
+            // Create request message for more control
+            var request = new HttpRequestMessage(HttpMethod.Post, "chat/completions")
+            {
+                Content = content
+            };
+            
+            // Use HttpCompletionOption.ResponseHeadersRead for streaming
+            var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
             response.EnsureSuccessStatusCode();
 
-            var responseString = await response.Content.ReadAsStringAsync();
-            _logger.LogDebug("Received response: {Response}", responseString);
-            var responseObject = JsonSerializer.Deserialize<OpenRouterResponse>(responseString);
+            // Read response as stream for better performance
+            using var responseStream = await response.Content.ReadAsStreamAsync();
+            var responseObject = await JsonSerializer.DeserializeAsync<OpenRouterResponse>(responseStream, _jsonOptions);
             
             if (responseObject?.choices == null || responseObject.choices.Length == 0)
             {
@@ -242,18 +351,32 @@ YOU MUST:
             string modelUsed = !string.IsNullOrEmpty(responseObject.model) ? responseObject.model : _model;
             _logger.LogInformation("OpenRouter selected model: {Model} for recommendations", modelUsed);
 
-            // Extract the JSON from the response text
+            // Get the response content
             var responseContent = responseObject.choices[0].message.content;
-            var jsonStartIndex = responseContent.IndexOf('{');
-            var jsonEndIndex = responseContent.LastIndexOf('}');
             
-            if (jsonStartIndex == -1 || jsonEndIndex == -1)
+            // Parse the JSON response
+            RecommendationsData? recommendationsData = null;
+            
+            try
             {
-                throw new Exception("Could not extract JSON from response");
+                // Try to parse directly first
+                recommendationsData = JsonSerializer.Deserialize<RecommendationsData>(responseContent, _jsonOptions);
             }
+            catch (JsonException)
+            {
+                // If direct parsing fails, try to extract JSON from the response
+                _logger.LogWarning("Direct JSON parsing failed, attempting to extract JSON from response");
+                var jsonStartIndex = responseContent.IndexOf('{');
+                var jsonEndIndex = responseContent.LastIndexOf('}');
                 
-            var jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
-            var recommendationsData = JsonSerializer.Deserialize<RecommendationsData>(jsonContent);
+                if (jsonStartIndex == -1 || jsonEndIndex == -1)
+                {
+                    throw new Exception("Could not extract JSON from response");
+                }
+                    
+                var jsonContent = responseContent.Substring(jsonStartIndex, jsonEndIndex - jsonStartIndex + 1);
+                recommendationsData = JsonSerializer.Deserialize<RecommendationsData>(jsonContent, _jsonOptions);
+            }
             
             if (recommendationsData?.recommendations == null)
             {
@@ -278,12 +401,21 @@ YOU MUST:
             }).ToList();
 
             _logger.LogInformation("Successfully generated {Count} trading recommendations", recommendations.Count);
+            
+            // Cache the recommendations
+            _cache[cacheKey] = new CacheItem(recommendations, _cacheExpiration);
+            
             return recommendations;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting trading recommendations");
             return new List<ForexRecommendation>();
+        }
+        finally
+        {
+            // Release the semaphore
+            _semaphore.Release();
         }
     }
     
@@ -370,4 +502,4 @@ YOU MUST:
     }
     
     #endregion
-} 
+}
