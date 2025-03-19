@@ -8,6 +8,10 @@ RUN npm ci
 # Rebuild the source code
 FROM node:18-alpine AS builder
 WORKDIR /app
+
+# Create public directory first
+RUN mkdir -p public
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
@@ -36,13 +40,11 @@ RUN addgroup --system --gid 1001 nodejs \
 ENV NODE_ENV production
 ENV NEXT_TELEMETRY_DISABLED 1
 
-# Copy built app
+# Copy built app and public directory
 COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
-
-# Create empty public directory if needed
-RUN mkdir -p ./public && chown nextjs:nodejs ./public
 
 # Switch to non-root user
 USER nextjs
