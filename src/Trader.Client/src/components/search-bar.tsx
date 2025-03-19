@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import StockAnalysis from './stock-analysis';
 import NewsFeed from './news-feed';
 import { Card } from '@/components/ui/card';
-import { tradingApi, ApiError, TradingAnalysis, MarketMover } from '@/services/api';
+import { tradingApi, ApiError, TradingAnalysis } from '@/services/api';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
@@ -19,7 +19,7 @@ const SearchBar = () => {
   const [analysis, setAnalysis] = useState<TradingAnalysis | null>(null);
   const [selectedProvider, setSelectedProvider] = useState('TwelveData');
   const [marketMoversCount, setMarketMoversCount] = useState(1);
-  const [marketMovers, setMarketMovers] = useState<MarketMover[]>([]);
+  const [marketMovers, setMarketMovers] = useState<any[]>([]);
   const [isLoadingMovers, setIsLoadingMovers] = useState(false);
 
   // Available providers
