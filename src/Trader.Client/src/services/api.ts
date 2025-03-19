@@ -143,7 +143,7 @@ export const tradingApi = {
         throw new ApiError(`Failed to analyze pair: ${errorText}`);
       }
 
-      const data = await response.json();
+      const data = await response.json() as TradingAnalysis;
       
       // Log the successful response data
       console.log('Analysis response:', data);
@@ -180,7 +180,7 @@ export const tradingApi = {
         throw new ApiError(`Failed to get market movers: ${errorText}`);
       }
 
-      const data = await response.json();
+      const data = await response.json() as MarketMover[];
       console.log('Market movers response:', data);
       return data;
     } catch (error) {
