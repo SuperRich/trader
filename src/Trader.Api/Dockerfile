@@ -1,22 +1,41 @@
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
-WORKDIR /app
-EXPOSE 80
-EXPOSE 443
-
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
-COPY ["src/Trader.Api/Trader.Api.csproj", "src/Trader.Api/"]
-COPY ["src/Trader.Core/Trader.Core.csproj", "src/Trader.Core/"]
-COPY ["src/Trader.Infrastructure/Trader.Infrastructure.csproj", "src/Trader.Infrastructure/"]
-RUN dotnet restore "src/Trader.Api/Trader.Api.csproj"
+
+# Copy csproj and restore dependencies
+COPY ["Trader.Api.csproj", "./"]
+RUN dotnet restore "Trader.Api.csproj"
+
+# Copy everything else and build
 COPY . .
-WORKDIR "/src/src/Trader.Api"
-RUN dotnet build "Trader.Api.csproj" -c Release -o /app/build
+RUN dotnet publish "Trader.Api.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
-FROM build AS publish
-RUN dotnet publish "Trader.Api.csproj" -c Release -o /app/publish
-
-FROM base AS final
+# Build runtime image
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
-COPY --from=publish /app/publish .
+
+# Create non-root user for security
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && adduser --disabled-password --gecos "" appuser \
+    && chown -R appuser /app
+
+# Copy published app
+COPY --from=build /app/publish .
+RUN chmod +x /app
+
+# Create health check endpoint
+RUN mkdir -p /app/health && echo "OK" > /app/health/index.html
+
+# Switch to non-root user
+USER appuser
+
+# Expose port
+EXPOSE 80
+
+# Set entry point
 ENTRYPOINT ["dotnet", "Trader.Api.dll"]
+
+# Add health check endpoint
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:80/health || exit 1

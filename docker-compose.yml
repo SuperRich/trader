@@ -3,33 +3,66 @@ version: '3.8'
 services:
   api:
     build:
-      context: .
-      dockerfile: src/Trader.Api/Dockerfile
-    ports:
-      - "7000:80"
+      context: ./src/Trader.Api
+      dockerfile: Dockerfile
+    container_name: trader-api
+    restart: unless-stopped
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - ASPNETCORE_URLS=http://+:80
-      - TraderMade__ApiKey=${TRADERMADE_API_KEY}
-      - OpenRouter__ApiKey=${OPENROUTER_API_KEY}
-    restart: unless-stopped
+      - OpenRouter__ApiKey=/run/secrets/openrouter_key
+      - TraderMade__ApiKey=/run/secrets/tradermade_key
     networks:
-      - trader-network
+      - trader-net
+    ports:
+      - "80:80"
+    secrets:
+      - openrouter_key
+      - tradermade_key
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   client:
     build:
-      context: .
-      dockerfile: src/Trader.Client/Dockerfile
+      context: ./src/Trader.Client
+      dockerfile: Dockerfile
+    container_name: trader-client
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://api:80
+    networks:
+      - trader-net
     ports:
       - "3000:3000"
-    environment:
-      - VITE_API_BASE_URL=http://api
     depends_on:
       - api
-    restart: unless-stopped
-    networks:
-      - trader-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
 networks:
-  trader-network:
+  trader-net:
     driver: bridge
+    name: trader-network
+
+secrets:
+  openrouter_key:
+    external: true
+  tradermade_key:
+    external: true

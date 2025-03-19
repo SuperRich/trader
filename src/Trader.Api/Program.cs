@@ -201,6 +201,11 @@ public class Program
 
         // Use CORS before other middleware
         app.UseCors(CorsConfiguration.DefaultPolicy);
+        
+        // Add health check endpoint for Docker
+        app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }))
+           .WithName("HealthCheck")
+           .WithOpenApi();
 
         // Define API endpoints
         // Endpoint to get prediction for a specific currency pair and timeframe

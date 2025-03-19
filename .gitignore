@@ -46,6 +46,8 @@ yarn-error.log
 
 # Docker
 .docker/
+docker-secrets/
+*.secret
 
 # Misc
 .DS_Store
