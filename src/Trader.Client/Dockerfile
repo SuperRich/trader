@@ -9,16 +9,16 @@ RUN npm ci
 FROM node:18-alpine AS builder
 WORKDIR /app
 
-# Create public directory first
-RUN mkdir -p public
-
+# Copy all dependencies and source files
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# Create necessary directories
+RUN mkdir -p public .next
+
 # Set environment variables
-ENV NODE_ENV production
-ENV NEXT_TELEMETRY_DISABLED 1
-ENV NEXT_PUBLIC_ESLINT_DISABLE=true
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 
 # Build the application
 RUN npm run build
@@ -37,12 +37,14 @@ RUN addgroup --system --gid 1001 nodejs \
     && chown -R nextjs:nodejs /app
 
 # Set environment variables
-ENV NODE_ENV production
-ENV NEXT_TELEMETRY_DISABLED 1
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
 
-# Copy built app and public directory
-COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
+# Copy necessary files
+COPY --from=builder --chown=nextjs:nodejs /app/next.config.* ./
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
 
