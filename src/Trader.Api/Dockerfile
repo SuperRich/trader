@@ -1,12 +1,20 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
-# Copy csproj and restore dependencies
-COPY ["Trader.Api.csproj", "./"]
+# Copy solution file and all project files first
+COPY ["Trader.Api/Trader.Api.csproj", "Trader.Api/"]
+COPY ["Trader.Core/Trader.Core.csproj", "Trader.Core/"]
+COPY ["Trader.Infrastructure/Trader.Infrastructure.csproj", "Trader.Infrastructure/"]
+
+# Restore dependencies
+WORKDIR /src/Trader.Api
 RUN dotnet restore "Trader.Api.csproj"
 
 # Copy everything else and build
-COPY . .
+COPY Trader.Api/ Trader.Api/
+COPY Trader.Core/ Trader.Core/
+COPY Trader.Infrastructure/ Trader.Infrastructure/
+
 RUN dotnet publish "Trader.Api.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
 # Build runtime image

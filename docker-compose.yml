@@ -3,8 +3,8 @@ version: '3.8'
 services:
   api:
     build:
-      context: ./src/Trader.Api
-      dockerfile: Dockerfile
+      context: ./src
+      dockerfile: Trader.Api/Dockerfile
     container_name: trader-api
     restart: unless-stopped
     environment:
