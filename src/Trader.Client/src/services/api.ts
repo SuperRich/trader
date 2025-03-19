@@ -1,5 +1,18 @@
 import { config } from '@/config';
 
+export interface MarketMover {
+  symbol: string;
+  price: number | string;
+  change: number;
+  relatedNews?: {
+    title: string;
+    description: string;
+    url: string;
+    publishedAt: string;
+    source: string;
+  }[];
+}
+
 export interface TradingAnalysis {
   currencyPair: string;
   sentiment: string;
@@ -145,7 +158,7 @@ export const tradingApi = {
     }
   },
 
-  getMarketMovers: async (provider: string = 'TwelveData', count: number = 1): Promise<any> => {
+  getMarketMovers: async (provider: string = 'TwelveData', count: number = 1): Promise<MarketMover[]> => {
     try {
       const response = await fetch(
         `${config.apiBaseUrl}/api/market-movers/forex/ema-filtered?provider=${provider}&Count=${count}&includeNews=true`,
