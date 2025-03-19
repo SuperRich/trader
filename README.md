@@ -11,13 +11,15 @@ VPS (217.154.57.29)
 ├── Docker Engine
 │   ├── trader-api (.NET 8 API)
 │   │   ├── Non-root user
-│   │   ├── Secure API keys (Docker secrets)
+│   │   ├── Secure API keys (via .env)
 │   │   └── Health checks
 │   └── trader-client (Next.js)
 │       ├── Non-root user
 │       ├── Production build
 │       └── Health checks
-└── Docker Network (isolated)
+├── Docker Network (isolated)
+└── Volumes
+    └── api-logs (persistent logs)
 ```
 
 ## Prerequisites
@@ -94,7 +96,7 @@ You can also deploy locally for testing:
 
 The script will:
 - Validate all dependencies
-- Securely store your API keys as Docker secrets
+- Securely store your API keys in a .env file
 - Build and start the containers
 - Perform health checks
 - Display access information
@@ -109,7 +111,7 @@ After deployment:
 
 This deployment includes several security enhancements:
 
-1. **Docker Secrets**: API keys are stored as Docker secrets, not environment variables
+1. **Secure Environment Variables**: API keys are stored in a protected .env file
 2. **Non-root Users**: Containers run as non-privileged users
 3. **Isolated Network**: Services communicate over an internal Docker network
 4. **Health Checks**: Automatic monitoring of service health
@@ -134,7 +136,7 @@ The test script will check:
 - Docker and Docker Compose installation
 - Container status
 - API and client accessibility
-- Docker secrets configuration
+- Environment variables configuration
 - API key validation
 
 ## Troubleshooting
@@ -143,7 +145,7 @@ The deployment script includes comprehensive error handling. If issues occur:
 
 1. **API Key Issues**:
    - The script will validate API keys and prompt for re-entry if needed
-   - Check Docker secrets: `docker secret ls`
+   - Check the .env file: `cat .env` (sensitive information, be careful)
    - Verify API configuration: `curl http://localhost:80/api/diagnostics/config`
 
 2. **Permission Problems**:
@@ -210,8 +212,8 @@ chmod +x cleanup.sh
 The cleanup script will:
 - Stop and remove all containers
 - Remove Docker images
-- Remove Docker secrets
 - Remove Docker networks
+- Remove environment files (.env)
 
 This is useful when:
 - You want to start with a clean slate
