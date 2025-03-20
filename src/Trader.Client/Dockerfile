@@ -19,8 +19,22 @@ RUN mkdir -p public
 ENV NEXT_TELEMETRY_DISABLED 1
 ENV NODE_ENV production
 
-# Build Next.js
-RUN npm run build
+# Debug the environment before building
+RUN echo "Node version: $(node -v)" && \
+    echo "NPM version: $(npm -v)" && \
+    echo "Directory listing:" && \
+    ls -la && \
+    echo "Package.json:" && \
+    cat package.json
+
+# Build Next.js with verbose output and check for errors
+RUN npm run build --verbose || (echo "BUILD FAILED" && exit 1)
+
+# Check if build succeeded and what directories were created
+RUN echo "After build - directory listing:" && \
+    ls -la && \
+    if [ -d ".next" ]; then echo ".next exists"; else echo ".next MISSING"; fi && \
+    if [ -d "build" ]; then echo "build exists"; else echo "build MISSING"; fi
 
 # Production image, copy all the files and run next
 FROM base AS runner
@@ -41,12 +55,11 @@ RUN mkdir -p /app && chown -R nextjs:nodejs /app
 
 WORKDIR /app
 
-# Copy built app
-COPY --from=builder --chown=nextjs:nodejs /app/package.json ./
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/next.config.* ./
+# Create necessary directories to prevent errors
+RUN mkdir -p .next public
+
+# Copy everything from builder
+COPY --from=builder --chown=nextjs:nodejs /app/ ./
 
 # Switch to non-root user
 USER nextjs
@@ -54,7 +67,7 @@ USER nextjs
 # Expose port
 EXPOSE 3000
 
-# Start the application with the correct directory
+# Start the application
 CMD ["npm", "start"]
 
 # Add health check
