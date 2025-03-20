@@ -4,7 +4,6 @@ WORKDIR /app
 # Install dependencies including next
 COPY package.json package-lock.json* ./
 RUN npm install
-RUN npm install next@latest
 
 # Rebuild the source code
 FROM node:18-alpine AS builder
@@ -14,9 +13,6 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p public .next
-
 # Set environment variables
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -24,6 +20,7 @@ ENV PATH=$PATH:/app/node_modules/.bin
 
 # Build the application
 RUN npm run build
+RUN ls -la
 
 # Production image, copy all the files and run next
 FROM node:18-alpine AS runner
@@ -45,11 +42,15 @@ ENV PORT=3000
 ENV PATH=$PATH:/app/node_modules/.bin
 
 # Copy necessary files
-COPY --from=builder --chown=nextjs:nodejs /app/next.config.* ./
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/build ./build
+COPY --from=builder /app/next.config.* ./
+
+# Ensure proper permissions
+RUN chown -R nextjs:nodejs /app
 
 # Switch to non-root user
 USER nextjs
