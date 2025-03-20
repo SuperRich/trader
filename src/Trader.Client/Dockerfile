@@ -45,6 +45,8 @@ RUN apk add --no-cache curl
 # Set environment variables
 ENV NODE_ENV production
 ENV NEXT_TELEMETRY_DISABLED 1
+ENV HOST 0.0.0.0
+ENV PORT 3000
 
 # Create non-root user
 RUN addgroup --system --gid 1001 nodejs && \
@@ -67,8 +69,8 @@ USER nextjs
 # Expose port
 EXPOSE 3000
 
-# Start the application
-CMD ["npm", "start"]
+# Start the application - use HOST 0.0.0.0 to bind to all interfaces
+CMD ["sh", "-c", "npm start -- -H 0.0.0.0"]
 
 # Add health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
