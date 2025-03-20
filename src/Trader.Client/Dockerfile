@@ -44,8 +44,9 @@ WORKDIR /app
 # Copy built app
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nextjs:nodejs /app/build ./build
+COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/next.config.* ./
 
 # Switch to non-root user
 USER nextjs
@@ -53,7 +54,7 @@ USER nextjs
 # Expose port
 EXPOSE 3000
 
-# Start the application
+# Start the application with the correct directory
 CMD ["npm", "start"]
 
 # Add health check
