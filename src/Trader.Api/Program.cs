@@ -1591,7 +1591,7 @@ public class Program
                 var twelvedataApiKey = configuration["TwelveData:ApiKey"] ?? configuration["TRADER_TWELVEDATA_API_KEY"];
                 var openrouterApiKey = configuration["OpenRouter:ApiKey"] ?? configuration["TRADER_OPENROUTER_API_KEY"];
                 var newsapiKey = configuration["NewsAPI:ApiKey"] ?? Environment.GetEnvironmentVariable("NEWSAPI_KEY");
-                var openrouterModel = configuration["OpenRouter:Model"] ?? "anthropic/claude-3-opus:beta"; // Default model
+                var openrouterModel = configuration["OpenRouter:Model"] ?? "openai/o3-mini-high"; // Default model
                 
                 var hasPerplexity = !string.IsNullOrEmpty(perplexityApiKey);
                 var hasPolygon = !string.IsNullOrEmpty(polygonApiKey);
