@@ -1,53 +1,48 @@
-FROM node:18-alpine AS deps
+FROM node:18-alpine AS base
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies only when needed
+FROM base AS deps
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm ci
 
-# Rebuild the source code
-FROM node:18-alpine AS builder
-WORKDIR /app
-
-# Copy all dependencies and source files
+# Rebuild the source code only when needed
+FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Set environment variables
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV PATH=$PATH:/app/node_modules/.bin
+# Next.js collects anonymous telemetry data about general usage.
+# Learn more here: https://nextjs.org/telemetry
+ENV NEXT_TELEMETRY_DISABLED 1
+ENV NODE_ENV production
 
-# Build the application
+# Build Next.js
 RUN npm run build
-# For Next.js 15, ensure .next is copied to build directory
-RUN mkdir -p build && cp -r .next/* build/ || echo "No .next directory to copy"
 
 # Production image, copy all the files and run next
-FROM node:18-alpine AS runner
-WORKDIR /app
+FROM base AS runner
 
 # Install curl for healthcheck
 RUN apk add --no-cache curl
 
-# Create non-root user and directories
-RUN addgroup --system --gid 1001 nodejs \
-    && adduser --system --uid 1001 nextjs \
-    && mkdir -p /app/build /app/public \
-    && chown -R nextjs:nodejs /app
-
 # Set environment variables
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV PORT=3000
-ENV PATH=$PATH:/app/node_modules/.bin
+ENV NODE_ENV production
+ENV NEXT_TELEMETRY_DISABLED 1
 
-# Copy necessary files
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/build ./build
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/next.config.* ./
+# Create non-root user
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# Set the correct permissions
+RUN mkdir -p /app && chown -R nextjs:nodejs /app
+
+WORKDIR /app
+
+# Copy built app
+COPY --from=builder --chown=nextjs:nodejs /app/package.json ./
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=nextjs:nodejs /app/build ./build
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 # Switch to non-root user
 USER nextjs
