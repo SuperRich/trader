@@ -1,9 +1,10 @@
 FROM node:18-alpine AS deps
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies including next
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN npm install
+RUN npm install next@latest
 
 # Rebuild the source code
 FROM node:18-alpine AS builder
@@ -19,6 +20,7 @@ RUN mkdir -p public .next
 # Set environment variables
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV PATH=$PATH:/app/node_modules/.bin
 
 # Build the application
 RUN npm run build
@@ -40,6 +42,7 @@ RUN addgroup --system --gid 1001 nodejs \
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
+ENV PATH=$PATH:/app/node_modules/.bin
 
 # Copy necessary files
 COPY --from=builder --chown=nextjs:nodejs /app/next.config.* ./
